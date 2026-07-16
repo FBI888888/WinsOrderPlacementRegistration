@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, IdMixin, TenantOwnedMixin, TimestampMixin
@@ -27,7 +27,10 @@ class Order(Base, IdMixin, TimestampMixin, TenantOwnedMixin):
     contractor_id: Mapped[int] = mapped_column(ForeignKey("contractors.id"), nullable=False, index=True)
     contractor_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     contractor_name_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    performer_id: Mapped[int | None] = mapped_column(ForeignKey("performers.id"), index=True)
+    performer_name_snapshot: Mapped[str | None] = mapped_column(String(100))
     student_name: Mapped[str | None] = mapped_column(String(100))
+    point_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     order_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     coupon_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)

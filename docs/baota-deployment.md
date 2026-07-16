@@ -112,12 +112,17 @@ location = /redoc {
 
 - Nginx：宝塔当前稳定版本。
 - Python：3.11。
-- Node.js：22 LTS，仅用于在服务器上构建前端；若内存紧张或已有其他前端依赖全局 Node 版本，可改为本机构建后只上传 `frontend/dist`（见第六节）。
+- Node.js：**22 LTS（最低 `^20.19.0` 或 `>=22.12.0`）**，仅用于在服务器上构建前端。Node 18 无法构建（Vite 8 / rolldown 会报 `styleText` 相关 SyntaxError）。若内存紧张、无法升级全局 Node，或已有其他前端依赖 Node 18，改为本机构建后只上传 `frontend/dist`（见第六节方案 B）。
 - 宝塔 Python 项目管理器：用于进程守护和日志管理。
 
 不要复用已有 Python 服务的虚拟环境。每个项目独立安装依赖，避免 FastAPI、SQLAlchemy 或 Uvicorn 版本互相影响。
 
-切换宝塔「Node 版本管理」中的全局版本前，确认不会影响服务器上其他前端项目的构建脚本。
+切换宝塔「Node 版本管理」中的全局版本前，确认不会影响服务器上其他前端项目的构建脚本。升级后在终端确认：
+
+```bash
+node -v   # 应显示 v20.19+ 或 v22.12+
+npm -v
+```
 
 ### 2. 检查端口
 
@@ -177,24 +182,31 @@ frontend/dist/
 └─ README.md
 ```
 
-### 2. 后端虚拟环境
+### 2. 后端虚拟环境（推荐用宝塔面板创建）
 
-虚拟环境路径二选一，不要混用：
+**推荐做法：** 在宝塔「Python 项目管理器」里新增项目时，勾选由面板创建虚拟环境（常见路径类似）：
 
-- **方式 A（推荐，与本文命令一致）**：在项目内手动创建 `backend/.venv`，Python 项目启动命令指向该路径。
-- **方式 B**：完全使用宝塔 Python 项目管理器自动创建的虚拟环境（常见路径含 `*_venv` 或 `/www/server/pyporject_evn/...`），依赖也装进该环境，启动命令使用该环境中的 `uvicorn`。
-
-方式 A：
-
-```bash
-cd /www/wwwroot/wins-order/backend
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+```text
+/www/server/pyporject_evn/wins-order-backend_venv
 ```
 
-如果宝塔安装的 Python 3.11 路径不同，在软件商店或 Python 项目管理器中复制实际解释器路径。
+或项目目录旁的 `*_venv`。不同宝塔版本路径略有差异，以面板项目详情里显示的「虚拟环境」绝对路径为准。下文用 `<BT_VENV>` 表示该路径。
+
+依赖必须装进**这一个**环境，启动命令也必须用其中的 `uvicorn`，不要再混用手动创建的 `backend/.venv`。
+
+创建 Python 项目后，在服务器终端安装依赖（把 `<BT_VENV>` 换成面板显示的真实路径）：
+
+```bash
+cd /www/wwwroot/wins-order/WinsOrderPlacementRegistration/backend
+source <BT_VENV>/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+ls -l <BT_VENV>/bin/uvicorn
+```
+
+也可在面板该项目的「模块 / 安装依赖」里粘贴 `requirements.txt` 安装，效果相同；装完后同样用上面的 `ls` 确认存在 `uvicorn`。
+
+可选备用：不使用面板 venv 时，可手动 `python3.11 -m venv .venv`，则启动命令改为 `backend/.venv/bin/uvicorn`。两种方式只选其一。
 
 ### 3. 后端生产配置
 
@@ -247,11 +259,11 @@ scripts.prepare_production_db --apply
 scripts.init_local_db
 ```
 
-首次部署先确认 Alembic 版本状态：
+首次部署先确认 Alembic 版本状态（`<BT_VENV>` 为宝塔项目虚拟环境路径）：
 
 ```bash
-cd /www/wwwroot/wins-order/backend
-source .venv/bin/activate
+cd /www/wwwroot/wins-order/WinsOrderPlacementRegistration/backend
+source <BT_VENV>/bin/activate
 alembic current
 ```
 
@@ -276,12 +288,22 @@ alembic current
 
 ## 六、构建前端
 
+生产 API 地址写在仓库内的 `frontend/.env.production`（`VITE_API_BASE_URL=/api/v1`）。执行 `npm run build` 时 Vite 会自动加载，无需再在命令行写环境变量。
+
+若代码目录实际为 `/www/wwwroot/wins-order/WinsOrderPlacementRegistration/`，把下文路径中的 `frontend` 换成该目录下的 `frontend` 即可。
+
 ### 方案 A：在服务器上构建
 
+先把 Node 升到 22（或至少 20.19）。宝塔常见做法：软件商店 → Node 版本管理器 → 安装并切换到 22，然后：
+
 ```bash
+hash -r
+node -v
 cd /www/wwwroot/wins-order/frontend
+# 若刚从 Node 18 装过依赖，先清掉再装
+rm -rf node_modules
 npm ci
-VITE_API_BASE_URL=/api/v1 npm run build
+npm run build
 ```
 
 构建完成后应存在：
@@ -292,17 +314,27 @@ VITE_API_BASE_URL=/api/v1 npm run build
 
 `npm run test` / `npm run lint` 建议在开发机或 CI 执行，不要作为服务器上线的硬性步骤；小内存机器上同时跑测试与构建容易失败或影响已有服务。
 
-### 方案 B：本机构建后上传（内存紧张或 Node 版本冲突时推荐）
+### 方案 B：本机构建后上传（Node 版本冲突或内存紧张时推荐）
 
-在开发机：
+开发机需 Node `^20.19.0` 或 `>=22.12.0`。在项目 `frontend` 目录：
 
-```bash
+```powershell
+# Windows PowerShell
 cd frontend
 npm ci
-VITE_API_BASE_URL=/api/v1 npm run build
+npm run build
 ```
 
-将生成的 `frontend/dist/` 上传到服务器 `/www/wwwroot/wins-order/frontend/dist/`，并设置可读权限（见第八节）。
+```bash
+# macOS / Linux
+cd frontend
+npm ci
+npm run build
+```
+
+不要使用 `VITE_API_BASE_URL=/api/v1 npm run build` 这种 Unix 写法在 PowerShell 里执行，会报「无法识别」；生产变量已由 `.env.production` 提供。
+
+将生成的 `frontend/dist/` 上传到服务器对应站点根目录（例如 `/www/wwwroot/wins-order/frontend/dist/` 或你的实际 `.../frontend/dist/`），并设置可读权限（见第八节）。
 
 不要在生产环境执行：
 
@@ -314,27 +346,41 @@ Vite 开发服务器不负责生产静态资源、TLS、缓存和进程安全。
 
 ## 七、在宝塔创建后端 Python 项目
 
-在宝塔面板进入“网站”或“Python 项目管理器”，新增 Python 项目。不同版本的宝塔界面名称可能略有差异，核心参数如下：
+在宝塔面板进入「Python 项目管理器」，新增 Python 项目。核心参数如下（虚拟环境选**面板创建**的那一个）：
 
 ```text
 项目名称：wins-order-backend
-项目目录：/www/wwwroot/wins-order/backend
-工作目录：/www/wwwroot/wins-order/backend
+项目目录：/www/wwwroot/wins-order/WinsOrderPlacementRegistration/backend
+工作目录：同上（必须是 backend 目录）
 Python 版本：3.11
-虚拟环境：/www/wwwroot/wins-order/backend/.venv
+虚拟环境：使用宝塔为该项目创建的环境（记下面板显示的绝对路径 <BT_VENV>）
 启动方式：自定义命令
-启动命令：/www/wwwroot/wins-order/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 18180 --workers 2
+启动命令：<BT_VENV>/bin/uvicorn app.main:app --host 127.0.0.1 --port 18180 --workers 2
 开机启动：开启
 守护进程：开启
 ```
+
+启动命令示例（路径以你面板为准，不要照抄 `.venv`）：
+
+```bash
+/www/server/pyporject_evn/wins-order-backend_venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 18180 --workers 2
+```
+
+创建项目后按第四节把依赖装进 `<BT_VENV>`，确认：
+
+```bash
+ls -l <BT_VENV>/bin/uvicorn
+```
+
+若启动命令仍写成 `.../backend/.venv/bin/uvicorn`，而实际用的是宝塔 venv，就会出现 `No such file or directory`。
 
 若改用其他端口（如 `18181`），把命令里的 `--port` 改掉即可。
 
 重要：
 
 - **不要点击 Python 项目的「映射」**。映射会额外生成反代或端口规则，容易与本文独立站点 + 手写 Nginx 冲突，也可能诱导开放后端端口。本系统的公网入口只走第八、九节的静态站点。
-- 若面板强制使用自建 venv，把启动命令中的 `uvicorn` 路径改成面板给出的绝对路径，并保证依赖装在同一环境。
 - 工作目录必须是 `backend`，否则读不到 `.env`，也无法导入 `app`。
+- 迁移、更新依赖时一律 `source <BT_VENV>/bin/activate`，不要再去激活不存在的 `backend/.venv`。
 
 资源建议：
 
@@ -383,9 +429,123 @@ find /www/wwwroot/wins-order/frontend/dist -type f -exec chmod 644 {} \;
 
 ## 九、配置 Nginx 同域反向代理
 
-在宝塔站点设置中打开“配置文件”。保留宝塔生成的 `server`、SSL 和日志配置，只在当前 `<DOMAIN>` 的 `server` 块中加入以下 `location`。
+本系统需要两件事：
 
-顺序建议如下：
+1. 把 `/api`、`/health` 反代到本机 FastAPI（可用宝塔「反向代理」界面添加）。
+2. SPA 刷新回退、拦截注册/文档（界面做不到，需在站点「配置文件」里补几行）。
+
+官方说明：[宝塔反向代理文档](https://docs.bt.cn/user-guide/site/php/site-config/reverse-proxy)。
+
+### 1. 用界面添加反向代理
+
+打开：**网站 → 你的 `<DOMAIN>` 站点 → 设置 → 反向代理 → 添加反向代理**。
+
+本系统必须做**子路径代理**（只代理 `/api`、`/health`，前端静态文件仍由站点根目录提供）。若界面把整站代理成 `/`，前端页面会失效，还容易和原有 `location /` 冲突。
+
+#### 界面里找不到「代理目录」时
+
+不同宝塔版本字段位置不同，按下面顺序找：
+
+1. 添加/编辑反向代理弹窗里点 **「高级」** / **「高级功能」** / **「开启高级功能」**。
+2. 出现后勾选 **「开启代理目录」**（有的版本名称略有差异）。
+3. 才会出现「代理目录」输入框。
+
+若展开高级后仍然没有「代理目录」：
+
+- **不要**只用「目标 URL」保存一条反代（那通常会生成 `location /`，把整站指到后端，错误）。
+- 改为直接在站点 **配置文件** 里手写 `/api`、`/health` 反代（见本节「手写反代」），界面反代可以不建。
+
+#### 有「代理目录」时怎么填
+
+后端端口若不是 `18180`，改成实际值。目标 URL **不要**加末尾 `/`（否则会剥掉 `/api` 前缀，接口变 404）。
+
+**规则一：API**
+
+| 字段 | 填写 |
+|------|------|
+| 代理名称 | `wins-api`（任意英文名） |
+| 目标 URL | `http://127.0.0.1:18180` |
+| 发送域名 | `$host` 或默认 |
+| 代理目录 | `/api` 或 `/api/` |
+| 缓存 | **关闭** |
+| WebSocket / 内容替换 | 不需要 |
+
+**规则二：健康检查**
+
+| 字段 | 填写 |
+|------|------|
+| 代理名称 | `wins-health` |
+| 目标 URL | `http://127.0.0.1:18180` |
+| 发送域名 | `$host` 或默认 |
+| 代理目录 | `/health` |
+| 缓存 | **关闭** |
+
+添加后验证：
+
+```bash
+curl -i http://127.0.0.1:18180/health
+curl -i https://<DOMAIN>/health
+curl -i -X POST https://<DOMAIN>/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+`/health` 应返回 `{"status":"ok"}`。登录接口若返回业务错误 JSON（而非 Nginx HTML 404）说明反代路径正确。
+
+#### 手写反代（无代理目录字段时用这个）
+
+在站点 **配置文件** 中、已有 `location /` **之前**插入（不要改掉或复制第二个 `location /`）：
+
+```nginx
+location ^~ /api/ {
+    proxy_pass http://127.0.0.1:18180;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 10s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+    proxy_buffering off;
+}
+
+location = /health {
+    proxy_pass http://127.0.0.1:18180/health;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+注意：`proxy_pass http://127.0.0.1:18180;` 不要写成带末尾 `/` 的地址。保存前 `nginx -t`，通过后重载。
+
+### 2. 在配置文件中补 SPA 与拦截（界面无法完成）
+
+仍在该站点 → **配置文件**。保留宝塔已生成的 `server`、SSL、以及「反向代理」生成的 `location`。
+
+**禁止再新增第二个 `location /`。** 宝塔静态站默认已有一个 `location /`；再粘贴一个会导致：
+
+```text
+nginx: [emerg] duplicate location "/"
+```
+
+正确做法：
+
+1. 在配置文件中搜索 `location /`，应只保留**一个**。
+2. **改**这个已有块的内容为 SPA 回退（不要再复制粘贴一整段 `location / { ... }`）：
+
+```nginx
+location / {
+    try_files $uri $uri/ /index.html;
+}
+```
+
+若原来是类似 `index index.html; try_files $uri $uri/ =404;`，把 `=404` 改成 `/index.html` 即可。
+
+3. **另外**只新增下面这些（不要带 `location /`）：
 
 ```nginx
 # 已有正式管理员，禁止公网匿名创建账套。
@@ -406,42 +566,61 @@ location = /redoc {
     return 404;
 }
 
-# FastAPI 接口。proxy_pass 不带结尾斜杠，保留原始 /api/... 路径。
-location ^~ /api/ {
-    proxy_pass http://127.0.0.1:18180;
-    proxy_http_version 1.1;
-
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-
-    proxy_connect_timeout 10s;
-    proxy_send_timeout 60s;
-    proxy_read_timeout 60s;
-
-    proxy_buffering off;
-}
-
-# 健康检查单独转发，便于监控和排障。
-location = /health {
-    proxy_pass http://127.0.0.1:18180/health;
-    proxy_http_version 1.1;
-
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-
 # Vite 构建产物可长期缓存；文件名包含内容哈希。
 location /assets/ {
     try_files $uri =404;
     expires 30d;
     add_header Cache-Control "public, immutable";
 }
+```
 
-# React BrowserRouter 刷新回退到 index.html。
+若你更习惯全部手写、不用界面反代，可用下面完整片段，但同样保证整个 `server` 里只有一个 `location /`，且不要与界面生成的 `/api`、`/health` 重复：
+
+```nginx
+location = /api/v1/auth/register {
+    return 404;
+}
+
+location = /docs {
+    return 404;
+}
+
+location = /openapi.json {
+    return 404;
+}
+
+location = /redoc {
+    return 404;
+}
+
+location ^~ /api/ {
+    proxy_pass http://127.0.0.1:18180;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_connect_timeout 10s;
+    proxy_send_timeout 60s;
+    proxy_read_timeout 60s;
+    proxy_buffering off;
+}
+
+location = /health {
+    proxy_pass http://127.0.0.1:18180/health;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location /assets/ {
+    try_files $uri =404;
+    expires 30d;
+    add_header Cache-Control "public, immutable";
+}
+
 location / {
     try_files $uri $uri/ /index.html;
 }
@@ -449,18 +628,34 @@ location / {
 
 注意：
 
-- 只修改新建的 `<DOMAIN>` 站点配置，不修改已有站点配置和 Nginx 全局配置。
-- 如果后端端口改为 `18181`，上面 `/api/` 与 `/health` 两个 `proxy_pass` 必须同步修改。
-- 不要为 `/api/` 配置静态缓存，否则登录和账务数据可能被错误缓存。
-- 宝塔也支持通过“网站 → 站点设置 → 反向代理”添加规则；官方说明见：[宝塔反向代理文档](https://docs.bt.cn/user-guide/site/php/site-config/reverse-proxy)。本项目同时需要 SPA 回退、注册拦截和文档拦截，直接编辑当前站点配置更清晰。
+- 只改当前 `<DOMAIN>` 站点，不改已有站点和 Nginx 全局配置。
+- 后端端口变更时，界面里两条规则的目标 URL 与手写 `proxy_pass` 都要同步改。
+- `/api` **禁止开启缓存**。
+- 界面已加反代后，不要再手写重复的 `/api`、`/health`、`location /`。
 
-保存前执行 Nginx 配置检查：
+保存前执行：
 
 ```bash
 nginx -t
 ```
 
-检查成功后，在宝塔中重载 Nginx。不要直接停止服务器上已有的 Nginx。
+成功后在宝塔中重载 Nginx，不要停止已有 Nginx 服务。
+
+### 3. 已出现 `duplicate location "/"` 时
+
+打开 `/www/server/panel/vhost/nginx/winsorders.winstech.top.conf`（或站点「配置文件」）：
+
+1. 搜索全部 `location /`（注意区分 `location /api`、`location /assets/`，那些可以保留）。
+2. 删掉你后来粘贴的那一整段多余的 `location / { ... }`。
+3. 只保留宝塔原来的那一个，并改成：
+
+```nginx
+location / {
+    try_files $uri $uri/ /index.html;
+}
+```
+
+4. 再执行 `nginx -t`，通过后重载 Nginx。
 
 ## 十、配置域名和 HTTPS
 
@@ -575,9 +770,9 @@ tar \
 # 2. 更新代码：Git 仓库用 pull；上传部署则跳过本步，改为覆盖上传源码（仍不要覆盖 backend/.env）。
 # git pull --ff-only
 
-# 3. 更新后端依赖。
+# 3. 更新后端依赖（使用宝塔项目 venv，不要用 backend/.venv）。
 cd backend
-source .venv/bin/activate
+source <BT_VENV>/bin/activate
 python -m pip install -r requirements.txt
 
 # 4. 按“五、数据库迁移”处理：先 alembic current，再 upgrade 或 stamp。
@@ -585,9 +780,10 @@ alembic current
 alembic upgrade head
 
 # 5. 构建前端（若使用本机构建，改为上传新的 frontend/dist）。
+# 需 Node ^20.19 或 >=22.12；生产 API 来自 .env.production。
 cd ../frontend
 npm ci
-VITE_API_BASE_URL=/api/v1 npm run build
+npm run build
 ```
 
 完成后：
@@ -658,10 +854,10 @@ FRONTEND_ORIGIN=https://<DOMAIN>
 
 必须与浏览器地址的协议、域名和端口完全一致，并重启后端项目使配置生效。
 
-同域部署时，前端必须以以下方式构建：
+同域部署时，确认 `frontend/.env.production` 中为 `VITE_API_BASE_URL=/api/v1`，然后执行：
 
 ```bash
-VITE_API_BASE_URL=/api/v1 npm run build
+npm run build
 ```
 
 ### 4. 登录成功但刷新后退出
@@ -711,16 +907,36 @@ ENVIRONMENT=production
 
 说明库中已有业务表但未记录迁移版本。确认结构一致后执行 `alembic stamp head`，不要反复 `upgrade head`。
 
-### 9. 虚拟环境或依赖错乱
+### 9. 虚拟环境或依赖错乱 / uvicorn 找不到
 
-确认启动命令中的 `uvicorn` 与 `pip install -r requirements.txt` 使用的是同一个 venv，未混用宝塔自动环境与 `backend/.venv`。
+你选的是宝塔创建的虚拟环境时，启动命令必须是：
+
+```text
+<BT_VENV>/bin/uvicorn app.main:app --host 127.0.0.1 --port 18180 --workers 2
+```
+
+不要写成 `.../backend/.venv/bin/uvicorn`（除非你确实手动建过 `.venv`）。
+
+若日志出现 `No such file or directory`：
+
+1. 打开宝塔该 Python 项目详情，复制「虚拟环境」绝对路径为 `<BT_VENV>`。
+2. 安装依赖并确认 uvicorn 存在：
+
+```bash
+cd /www/wwwroot/wins-order/WinsOrderPlacementRegistration/backend
+source <BT_VENV>/bin/activate
+python -m pip install -r requirements.txt
+ls -l <BT_VENV>/bin/uvicorn
+```
+
+3. 把启动命令改成上面的 `<BT_VENV>/bin/uvicorn ...`，工作目录设为 `backend`，再重启项目。
 
 ## 十六、最终上线检查清单
 
 - 使用独立域名/子域名，未挂到已有站子路径。
 - 域名解析到宝塔服务器，HTTPS 有效并强制跳转。
 - 前端根目录为 `frontend/dist`，不是项目根目录。
-- 后端使用独立 Python 3.11 虚拟环境，未复用其他项目 venv。
+- 后端使用宝塔为该项目创建的独立 venv；启动命令与 `pip install` 指向同一 `<BT_VENV>`。
 - 未使用 Python 项目「映射」；公网入口仅为新建静态站点。
 - Uvicorn 只监听 `127.0.0.1:<BACKEND_PORT>`（默认 `18180`）。
 - 公网未开放后端端口；已有服务端口未被误改。
@@ -729,7 +945,7 @@ ENVIRONMENT=production
 - `ENVIRONMENT=production`。
 - `SECURE_COOKIES=true`。
 - `FRONTEND_ORIGIN=https://<DOMAIN>`。
-- 前端构建变量为 `VITE_API_BASE_URL=/api/v1`。
+- 前端用 Node `^20.19` / `>=22.12` 构建，且 `.env.production` 中为 `VITE_API_BASE_URL=/api/v1`。
 - `/api/v1/auth/register`、`/docs`、`/openapi.json` 已被 Nginx 拦截。
 - Alembic 已到 `head`（`upgrade` 或必要时 `stamp`）。
 - `/health`、登录、刷新登录和页面刷新验证通过。

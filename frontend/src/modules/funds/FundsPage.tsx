@@ -1,8 +1,8 @@
 import { PlusOutlined, WalletOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, Col, DatePicker, Form, Input, Modal, Row, Select, Space, Statistic, Table, Tag } from 'antd'
+import { App, Button, Card, Col, DatePicker, Form, Input, Modal, Row, Select, Space, Statistic, Switch, Table, Tag } from 'antd'
 import dayjs from 'dayjs'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, errorMessage } from '../../shared/api'
 import { Money, MoneyInput, PageTitle } from '../../shared/components'
 import { statusText } from '../../shared/format'
@@ -14,25 +14,76 @@ const entryText: Record<string, string> = {
   SOURCE_RECEIPT: '放单收款', REVERSAL: '冲正流水',
 }
 
+type PartyKind = 'contractor' | 'source'
+
 export function FundsPage() {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()
   const transactionType = Form.useWatch('transaction_type', form)
+  const [partyKind, setPartyKind] = useState<PartyKind>('contractor')
+  const [partyId, setPartyId] = useState<number>()
+  const [showAllBalances, setShowAllBalances] = useState(false)
+
   const balances = useQuery({ queryKey: ['fund-balances'], queryFn: () => api.get<Balance[]>('/funds/balances').then((res) => res.data) })
-  const entries = useQuery({ queryKey: ['fund-entries'], queryFn: () => api.get<LedgerEntry[]>('/funds/entries').then((res) => res.data) })
   const contractors = useQuery({ queryKey: ['contractors', 'all'], queryFn: () => api.get<Contractor[]>('/partners/contractors').then((res) => res.data) })
   const sources = useQuery({ queryKey: ['sources'], queryFn: () => api.get<Source[]>('/partners/sources').then((res) => res.data) })
+
+  const activeContractors = useMemo(
+    () => (contractors.data ?? []).filter((item) => item.is_active),
+    [contractors.data],
+  )
+  const activeSources = useMemo(
+    () => (sources.data ?? []).filter((item) => item.is_active),
+    [sources.data],
+  )
+
+  useEffect(() => {
+    if (partyId !== undefined) return
+    if (activeContractors.length > 0) {
+      setPartyKind('contractor')
+      setPartyId(activeContractors[0].id)
+      return
+    }
+    if (activeSources.length > 0) {
+      setPartyKind('source')
+      setPartyId(activeSources[0].id)
+    }
+  }, [activeContractors, activeSources, partyId])
+
+  const entryParams = useMemo(() => {
+    if (!partyId) return undefined
+    return partyKind === 'contractor' ? { contractor_id: partyId } : { source_id: partyId }
+  }, [partyKind, partyId])
+
+  const entries = useQuery({
+    queryKey: ['fund-entries', entryParams],
+    queryFn: () => api.get<LedgerEntry[]>('/funds/entries', { params: entryParams }).then((res) => res.data),
+    enabled: Boolean(entryParams),
+  })
+
   const names = useMemo(() => ({
     contractors: new Map(contractors.data?.map((item) => [item.id, item.name])),
     sources: new Map(sources.data?.map((item) => [item.id, item.name])),
   }), [contractors.data, sources.data])
+
+  const personBalances = useMemo(() => {
+    if (!partyId || !balances.data) return []
+    return balances.data.filter((item) => item.counterparty_id === partyId)
+  }, [balances.data, partyId])
+
   const totals = useMemo(() => {
     const result = { ADVANCE: 0, COMMISSION_PAYABLE: 0, SOURCE_RECEIVABLE: 0 }
-    balances.data?.forEach((item) => { result[item.account] += Number(item.balance) })
+    personBalances.forEach((item) => { result[item.account] += Number(item.balance) })
     return result
-  }, [balances.data])
+  }, [personBalances])
+
+  const balanceTableData = showAllBalances ? (balances.data ?? []) : personBalances
+
+  const selectedName = partyKind === 'contractor'
+    ? names.contractors.get(partyId ?? -1)
+    : names.sources.get(partyId ?? -1)
 
   const mutation = useMutation({
     mutationFn: (values: Record<string, unknown>) => api.post('/funds/transactions', { ...values, business_date: dayjs(values.business_date as string).format('YYYY-MM-DD') }),
@@ -47,22 +98,95 @@ export function FundsPage() {
     onError: (error) => message.error(errorMessage(error)),
   })
 
+  const mutedStyle = { opacity: 0.45 }
+
   return (
     <div className="page-stack">
       <PageTitle title="资金流水" description="垫资余额、佣金应付和放单应收分别核算；资金进出不会直接改变订单利润。" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>登记资金</Button>} />
+      <Card size="small">
+        <Space wrap>
+          <span>往来对象</span>
+          <Select
+            value={partyKind}
+            style={{ width: 120 }}
+            onChange={(value: PartyKind) => {
+              setPartyKind(value)
+              const nextId = value === 'contractor' ? activeContractors[0]?.id : activeSources[0]?.id
+              setPartyId(nextId)
+            }}
+            options={[
+              { value: 'contractor', label: '做单方' },
+              { value: 'source', label: '放单人员' },
+            ]}
+          />
+          <Select
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择人员"
+            value={partyId}
+            style={{ minWidth: 200 }}
+            onChange={setPartyId}
+            options={
+              partyKind === 'contractor'
+                ? (contractors.data ?? []).map((item) => ({
+                  value: item.id,
+                  label: `${item.name} · ${statusText[item.contractor_type]}${item.is_active ? '' : '（停用）'}`,
+                }))
+                : (sources.data ?? []).map((item) => ({
+                  value: item.id,
+                  label: `${item.name}${item.is_active ? '' : '（停用）'}`,
+                }))
+            }
+          />
+          {selectedName && <Tag>{selectedName}</Tag>}
+        </Space>
+      </Card>
       <Row gutter={[16, 16]}>
-        <Col xs={24} md={8}><Card className="metric-card"><Statistic title="垫资可用余额" value={totals.ADVANCE} prefix={<WalletOutlined />} formatter={(value) => <Money value={Number(value)} signed />} /></Card></Col>
-        <Col xs={24} md={8}><Card className="metric-card"><Statistic title="待付佣金" value={totals.COMMISSION_PAYABLE} formatter={(value) => <Money value={Number(value)} />} /></Card></Col>
-        <Col xs={24} md={8}><Card className="metric-card"><Statistic title="放单应收" value={totals.SOURCE_RECEIVABLE} formatter={(value) => <Money value={Number(value)} />} /></Card></Col>
+        <Col xs={24} md={8}>
+          <Card className="metric-card" style={partyKind === 'source' ? mutedStyle : undefined}>
+            <Statistic
+              title="垫资可用余额"
+              value={partyKind === 'contractor' ? totals.ADVANCE : 0}
+              prefix={<WalletOutlined />}
+              formatter={(value) => partyKind === 'contractor' ? <Money value={Number(value)} signed /> : '—'}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card className="metric-card" style={partyKind === 'source' ? mutedStyle : undefined}>
+            <Statistic
+              title="待付佣金"
+              value={partyKind === 'contractor' ? totals.COMMISSION_PAYABLE : 0}
+              formatter={(value) => partyKind === 'contractor' ? <Money value={Number(value)} /> : '—'}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card className="metric-card" style={partyKind === 'contractor' ? mutedStyle : undefined}>
+            <Statistic
+              title="放单应收"
+              value={partyKind === 'source' ? totals.SOURCE_RECEIVABLE : 0}
+              formatter={(value) => partyKind === 'source' ? <Money value={Number(value)} /> : '—'}
+            />
+          </Card>
+        </Col>
       </Row>
-      <Card title="往来余额">
-        <Table<Balance> rowKey={(item) => `${item.account}-${item.counterparty_id}`} dataSource={balances.data} loading={balances.isLoading} pagination={{ pageSize: 10 }} columns={[
+      <Card
+        title="往来余额"
+        extra={(
+          <Space>
+            <span>显示全部</span>
+            <Switch checked={showAllBalances} onChange={setShowAllBalances} />
+          </Space>
+        )}
+      >
+        <Table<Balance> rowKey={(item) => `${item.account}-${item.counterparty_id}`} dataSource={balanceTableData} loading={balances.isLoading} pagination={{ pageSize: 10 }} columns={[
           { title: '账户', dataIndex: 'account', render: (value) => ({ ADVANCE: '垫资余额', COMMISSION_PAYABLE: '佣金应付', SOURCE_RECEIVABLE: '放单应收' }[value as string]) },
           { title: '往来对象', dataIndex: 'counterparty_name' },
           { title: '余额', dataIndex: 'balance', align: 'right', render: (value, item) => <Money value={value} signed={item.account === 'ADVANCE'} /> },
         ]} />
       </Card>
-      <Card title="最近流水">
+      <Card title={selectedName ? `最近流水 · ${selectedName}` : '最近流水'}>
         <Table<LedgerEntry> rowKey="id" dataSource={entries.data} loading={entries.isLoading} scroll={{ x: 900 }} pagination={{ pageSize: 15 }} columns={[
           { title: '日期', dataIndex: 'business_date', width: 110 },
           { title: '类型', dataIndex: 'entry_type', width: 130, render: (value) => <Tag>{entryText[value] ?? value}</Tag> },

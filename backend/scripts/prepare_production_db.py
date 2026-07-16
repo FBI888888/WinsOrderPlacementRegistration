@@ -4,16 +4,18 @@ import secrets
 from dataclasses import dataclass
 
 from pydantic import EmailStr, TypeAdapter
-from sqlalchemy import Connection, text
+from sqlalchemy import Connection, inspect, text
 
 from app.core.security import hash_password, verify_password
 from app.db.session import engine
 
 BUSINESS_TABLES = (
     "settlement_items",
+    "point_entries",
     "ledger_entries",
     "settlements",
     "orders",
+    "performers",
     "contractor_rates",
     "source_rates",
     "contractors",
@@ -136,7 +138,14 @@ def print_preflight(owner: OwnerAccount, counts: dict[str, int]) -> None:
 
 
 def clear_business_data(connection: Connection) -> None:
-    connection.execute(text("UPDATE ledger_entries SET reversed_entry_id = NULL WHERE reversed_entry_id IS NOT NULL"))
+    reversed_entry_tables = ("ledger_entries", "point_entries")
+    inspector = inspect(connection)
+    for table in reversed_entry_tables:
+        columns = {column["name"] for column in inspector.get_columns(table)}
+        if "reversed_entry_id" in columns:
+            connection.execute(
+                text(f"UPDATE {table} SET reversed_entry_id = NULL WHERE reversed_entry_id IS NOT NULL")
+            )
     for table in BUSINESS_TABLES:
         connection.execute(text(f"DELETE FROM `{table}`"))
 

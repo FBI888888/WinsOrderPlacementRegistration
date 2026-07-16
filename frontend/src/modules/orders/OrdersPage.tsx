@@ -1,19 +1,28 @@
 import { DownloadOutlined, MoreOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, Dropdown, Input, Select, Space, Table, Tag } from 'antd'
+import { App, Button, Card, Drawer, Dropdown, Input, Select, Space, Table, Tag, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, errorMessage } from '../../shared/api'
 import { Money, PageTitle, StatusTag } from '../../shared/components'
-import type { Contractor, Order, OrderStatus, Source } from '../../shared/types'
+import { dateTime } from '../../shared/format'
+import type { Contractor, Order, OrderHistoryItem, OrderStatus, Performer, Source } from '../../shared/types'
 import { OrderFormDrawer, type OrderFormValues } from './OrderFormDrawer'
+
+const historyActionText: Record<string, string> = {
+  'order.created': '创建订单',
+  'order.updated': '修改订单',
+  'order.status_changed': '变更订单状态',
+}
 
 export function OrdersPage() {
   const { message, modal } = App.useApp()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [open, setOpen] = useState(searchParams.get('new') === '1')
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null)
+  const [historyOrder, setHistoryOrder] = useState<Order | null>(null)
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState<string>()
   const [sourceId, setSourceId] = useState<number>()
@@ -33,47 +42,101 @@ export function OrdersPage() {
     queryKey: ['contractors', 'leaders'],
     queryFn: () => api.get<Contractor[]>('/partners/contractors', { params: { contractor_type: 'LEADER' } }).then((res) => res.data),
   })
+  const performers = useQuery({
+    queryKey: ['performers', 'orders'],
+    queryFn: () => api.get<Performer[]>('/partners/performers').then((res) => res.data),
+  })
   const filters = useMemo(() => ({ page, page_size: 20, status, source_id: sourceId, contractor_type: contractorType }), [page, status, sourceId, contractorType])
   const orders = useQuery({
     queryKey: ['orders', filters],
     queryFn: () => api.get<{ items: Order[]; total: number }>('/orders', { params: filters }).then((res) => res.data),
   })
+  const history = useQuery({
+    queryKey: ['order-history', historyOrder?.id],
+    queryFn: () => api.get<OrderHistoryItem[]>(`/orders/${historyOrder!.id}/history`).then((res) => res.data),
+    enabled: Boolean(historyOrder?.id),
+  })
   const filteredItems = useMemo(() => {
     const value = keyword.trim().toLowerCase()
     if (!value) return orders.data?.items ?? []
     return (orders.data?.items ?? []).filter((order) =>
-      [order.order_no, order.source_name, order.contractor_name, order.student_name]
+      [order.order_no, order.source_name, order.contractor_name, order.performer_name]
         .filter(Boolean)
         .some((item) => String(item).toLowerCase().includes(value)),
     )
   }, [orders.data?.items, keyword])
 
+  const notifyCouponEligibility = (order: Order) => {
+    if (order.available_coupons > 0 && order.performer_name) {
+      message.warning(`${order.performer_name} 当前有 ${order.point_balance ?? 0} 积分，可提醒其兑换 ${order.available_coupons} 张 30 元优惠券`)
+    }
+  }
+
   const createMutation = useMutation({
-    mutationFn: (values: OrderFormValues) => api.post('/orders', {
+    mutationFn: (values: OrderFormValues) => api.post<Order>('/orders', {
       ...values,
       business_date: dayjs(values.business_date).format('YYYY-MM-DD'),
     }),
-    onSuccess: async () => {
+    onSuccess: async (response) => {
       message.success('订单已保存')
+      notifyCouponEligibility(response.data)
       setOpen(false)
       setSearchParams({})
       await queryClient.invalidateQueries({ queryKey: ['orders'] })
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      await queryClient.invalidateQueries({ queryKey: ['performers'] })
+      await queryClient.invalidateQueries({ queryKey: ['point-accounts'] })
     },
     onError: (error) => message.error(errorMessage(error, '订单保存失败')),
   })
-  const statusMutation = useMutation({
-    mutationFn: ({ id, target, reason }: { id: number; target: OrderStatus; reason?: string }) =>
-      api.post(`/orders/${id}/status`, { status: target, reason }),
-    onSuccess: async () => {
-      message.success('订单状态已更新')
+  const updateMutation = useMutation({
+    mutationFn: ({ id, values }: { id: number; values: OrderFormValues }) => api.patch<Order>(`/orders/${id}`, {
+      business_date: dayjs(values.business_date).format('YYYY-MM-DD'),
+      source_id: values.source_id,
+      contractor_type: values.contractor_type,
+      contractor_id: values.contractor_type === 'LEADER' ? values.contractor_id : null,
+      performer_id: values.performer_id ?? null,
+      performer_name: values.performer_name?.trim() || null,
+      save_performer: values.save_performer,
+      order_amount: values.order_amount,
+      coupon_amount: values.coupon_amount,
+      actual_paid: values.actual_paid,
+      settlement_income_override: values.settlement_income_override ?? null,
+      income_override_reason: values.settlement_income_override == null
+        ? null
+        : values.income_override_reason?.trim() || null,
+      commission_override: values.commission_override ?? null,
+      commission_override_reason: values.commission_override == null
+        ? null
+        : values.commission_override_reason?.trim() || null,
+      note: values.note?.trim() || null,
+    }),
+    onSuccess: async (response) => {
+      message.success('订单已更新')
+      notifyCouponEligibility(response.data)
+      setEditingOrder(null)
       await queryClient.invalidateQueries({ queryKey: ['orders'] })
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      await queryClient.invalidateQueries({ queryKey: ['performers'] })
+      await queryClient.invalidateQueries({ queryKey: ['point-accounts'] })
+    },
+    onError: (error) => message.error(errorMessage(error, '订单更新失败')),
+  })
+  const statusMutation = useMutation({
+    mutationFn: ({ id, target, reason }: { id: number; target: OrderStatus; reason?: string }) =>
+      api.post<Order>(`/orders/${id}/status`, { status: target, reason }),
+    onSuccess: async (response) => {
+      message.success('订单状态已更新')
+      notifyCouponEligibility(response.data)
+      await queryClient.invalidateQueries({ queryKey: ['orders'] })
+      await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      await queryClient.invalidateQueries({ queryKey: ['performers'] })
+      await queryClient.invalidateQueries({ queryKey: ['point-accounts'] })
     },
     onError: (error) => message.error(errorMessage(error, '状态更新失败')),
   })
 
-  const closeDrawer = () => {
+  const closeCreateDrawer = () => {
     setOpen(false)
     setSearchParams({})
   }
@@ -136,23 +199,25 @@ export function OrdersPage() {
             { title: '订单号', dataIndex: 'order_no', width: 180, render: (value) => <span className="mono">{value}</span> },
             { title: '放单人员', dataIndex: 'source_name', width: 130 },
             { title: '做单方', width: 170, render: (_, order) => <Space size={4}><StatusTag value={order.contractor_type} /><span>{order.contractor_name}</span></Space> },
-            { title: '学生', dataIndex: 'student_name', width: 100, render: (value) => value || '—' },
+            { title: '实际做单人', dataIndex: 'performer_name', width: 120, render: (value) => value || '待补' },
             { title: '状态', dataIndex: 'status', width: 90, render: (value) => <StatusTag value={value} /> },
             { title: '标价', dataIndex: 'order_amount', align: 'right', width: 110, render: (value) => <Money value={value} /> },
             { title: '实付', dataIndex: 'actual_paid', align: 'right', width: 110, render: (value) => <Money value={value} /> },
             { title: '佣金', dataIndex: 'commission', align: 'right', width: 100, render: (value, order) => <Space size={2}><Money value={value} />{order.commission_overridden && <Tag>覆盖</Tag>}</Space> },
             { title: '利润', dataIndex: 'profit', align: 'right', width: 120, render: (value) => <Money value={value} signed /> },
             {
-              title: '', fixed: 'right', width: 54,
+              title: '操作', fixed: 'right', width: 100,
               render: (_, order) => {
                 const items = []
+                items.push({ key: 'edit', label: '编辑', onClick: () => setEditingOrder(order) })
+                items.push({ key: 'history', label: '历史', onClick: () => setHistoryOrder(order) })
                 if (order.status === 'DRAFT') items.push({ key: 'dispatch', label: '标记已派单', onClick: () => statusMutation.mutate({ id: order.id, target: 'DISPATCHED' }) })
                 if (order.status === 'DRAFT' || order.status === 'DISPATCHED') {
                   items.push({ key: 'success', label: '标记成功并入账', onClick: () => statusMutation.mutate({ id: order.id, target: 'SUCCESS' }) })
                   items.push({ key: 'cancel', danger: true, label: '取消订单', onClick: () => transitionWithReason(order, 'CANCELLED') })
                 }
                 if (order.status === 'SUCCESS') items.push({ key: 'reverse', danger: true, label: '冲正订单', onClick: () => transitionWithReason(order, 'REVERSED') })
-                return <Dropdown menu={{ items }} disabled={!items.length}><Button type="text" icon={<MoreOutlined />} /></Dropdown>
+                return <Dropdown menu={{ items }}><Button type="text" icon={<MoreOutlined />}>操作</Button></Dropdown>
               },
             },
           ]}
@@ -160,12 +225,60 @@ export function OrdersPage() {
       </Card>
       <OrderFormDrawer
         open={open}
+        mode="create"
         sources={sources.data ?? []}
         leaders={leaders.data ?? []}
+        performers={performers.data ?? []}
         submitting={createMutation.isPending}
-        onClose={closeDrawer}
+        onClose={closeCreateDrawer}
         onSubmit={async (values) => { await createMutation.mutateAsync(values) }}
       />
+      <OrderFormDrawer
+        open={Boolean(editingOrder)}
+        mode="edit"
+        initialOrder={editingOrder}
+        sources={sources.data ?? []}
+        leaders={leaders.data ?? []}
+        performers={performers.data ?? []}
+        submitting={updateMutation.isPending}
+        onClose={() => setEditingOrder(null)}
+        onSubmit={async (values) => {
+          if (!editingOrder) return
+          await updateMutation.mutateAsync({ id: editingOrder.id, values })
+        }}
+      />
+      <Drawer
+        title={historyOrder ? `订单历史 · ${historyOrder.order_no}` : '订单历史'}
+        width={480}
+        open={Boolean(historyOrder)}
+        onClose={() => setHistoryOrder(null)}
+        destroyOnHidden
+      >
+        <Table<OrderHistoryItem>
+          rowKey="id"
+          loading={history.isLoading}
+          dataSource={history.data}
+          pagination={false}
+          locale={{ emptyText: '暂无创建或编辑记录' }}
+          columns={[
+            { title: '时间', dataIndex: 'created_at', width: 150, render: dateTime },
+            {
+              title: '操作',
+              dataIndex: 'action',
+              width: 110,
+              render: (value) => <Tag>{historyActionText[value] ?? value}</Tag>,
+            },
+            { title: '操作者', dataIndex: 'user_name', width: 90, render: (value) => value || '系统' },
+            {
+              title: '详情',
+              dataIndex: 'payload',
+              render: (value) => value
+                ? <Typography.Text code className="audit-payload">{JSON.stringify(value)}</Typography.Text>
+                : '—',
+            },
+          ]}
+        />
+      </Drawer>
     </div>
   )
 }

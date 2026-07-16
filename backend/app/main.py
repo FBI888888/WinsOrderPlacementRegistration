@@ -6,6 +6,7 @@ from app.modules.funds.router import router as funds_router
 from app.modules.iam.router import router as iam_router
 from app.modules.orders.router import router as orders_router
 from app.modules.partners.router import router as partners_router
+from app.modules.points.router import router as points_router
 from app.modules.reports.router import router as reports_router
 from app.modules.settlements.router import router as settlements_router
 
@@ -28,6 +29,7 @@ for router in (
     iam_router,
     partners_router,
     orders_router,
+    points_router,
     funds_router,
     settlements_router,
     reports_router,

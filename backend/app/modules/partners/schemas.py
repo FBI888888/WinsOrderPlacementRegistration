@@ -1,9 +1,9 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.partners.models import ContractorType, SettlementBasis
+from app.modules.partners.models import ContractorType, PerformerType, SettlementBasis
 
 
 class SourceCreate(BaseModel):
@@ -49,13 +49,6 @@ class ContractorCreate(BaseModel):
     note: str | None = Field(default=None, max_length=500)
     effective_date: date = Field(default_factory=date.today)
 
-    @field_validator("contractor_type")
-    @classmethod
-    def managed_contractors_are_leaders(cls, value: ContractorType) -> ContractorType:
-        if value != ContractorType.LEADER:
-            raise ValueError("散户由录单时自动创建，无需手动维护")
-        return value
-
 
 class ContractorUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
@@ -77,6 +70,34 @@ class ContractorOutput(BaseModel):
     contractor_type: str
     contact: str | None
     default_commission: Decimal
+    is_active: bool
+    note: str | None
+    created_at: datetime
+
+
+class PerformerCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    performer_type: PerformerType
+    contractor_id: int
+    is_listed: bool = True
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PerformerUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    is_listed: bool | None = None
+    is_active: bool | None = None
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PerformerOutput(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    performer_type: str
+    contractor_id: int
+    is_listed: bool
     is_active: bool
     note: str | None
     created_at: datetime

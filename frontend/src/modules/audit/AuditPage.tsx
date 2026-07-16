@@ -10,7 +10,9 @@ import type { AuditLog } from '../../shared/types'
 const actionText: Record<string, string> = {
   'tenant.created': '创建账套', 'auth.login': '登录', 'member.created': '添加成员', 'member.updated': '调整成员',
   'source.created': '新增放单人员', 'source.updated': '修改放单人员', 'contractor.created': '新增学生头子',
-  'contractor.updated': '修改做单方', 'order.created': '创建订单', 'order.updated': '修改订单',
+  'contractor.updated': '修改做单方', 'performer.created': '新增实际做单人',
+  'performer.updated': '修改实际做单人', 'points.coupon_redeemed': '兑换积分优惠券',
+  'order.created': '创建订单', 'order.updated': '修改订单',
   'order.status_changed': '变更订单状态', 'fund.transaction_created': '登记资金流水',
   'settlement.created': '生成结算单', 'settlement.confirmed': '确认结算', 'settlement.reversed': '冲正结算',
   'report.exported': '导出报表',

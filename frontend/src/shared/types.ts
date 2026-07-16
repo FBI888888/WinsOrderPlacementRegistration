@@ -1,6 +1,7 @@
 export type Role = 'OWNER' | 'BOOKKEEPER' | 'VIEWER'
 export type OrderStatus = 'DRAFT' | 'DISPATCHED' | 'SUCCESS' | 'CANCELLED' | 'REVERSED'
 export type ContractorType = 'LEADER' | 'RETAIL'
+export type PerformerType = 'STUDENT' | 'RETAIL'
 
 export interface Me {
   user_id: number
@@ -20,6 +21,29 @@ export interface Source {
   is_active: boolean
   note?: string
   created_at: string
+}
+
+export interface Performer {
+  id: number
+  name: string
+  performer_type: PerformerType
+  contractor_id: number
+  is_listed: boolean
+  is_active: boolean
+  note?: string
+  created_at: string
+}
+
+export interface PointAccount {
+  performer_id: number
+  performer_name: string
+  performer_type: PerformerType
+  contractor_id: number
+  contractor_name: string
+  is_listed: boolean
+  is_active: boolean
+  balance: string
+  available_coupons: number
 }
 
 export interface Contractor {
@@ -43,7 +67,11 @@ export interface Order {
   contractor_id: number
   contractor_type: ContractorType
   contractor_name: string
+  performer_id?: number
+  performer_name?: string
   student_name?: string
+  point_balance?: string
+  available_coupons: number
   order_amount: string
   coupon_amount: string
   actual_paid: string
@@ -51,8 +79,10 @@ export interface Order {
   discount_snapshot: string
   settlement_income: string
   income_overridden: boolean
+  income_override_reason?: string
   commission: string
   commission_overridden: boolean
+  commission_override_reason?: string
   cost: string
   profit: string
   note?: string
@@ -131,6 +161,15 @@ export interface AuditLog {
   action: string
   resource_type: string
   resource_id?: string
+  payload?: Record<string, unknown>
+  created_at: string
+}
+
+export interface OrderHistoryItem {
+  id: number
+  user_id?: number
+  user_name?: string
+  action: string
   payload?: Record<string, unknown>
   created_at: string
 }

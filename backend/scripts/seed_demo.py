@@ -87,7 +87,7 @@ def main() -> None:
                 source_id=source.id,
                 contractor_type=ContractorType.LEADER,
                 contractor_id=leader.id,
-                student_name="演示学生",
+                performer_name="演示学生",
                 order_amount=Decimal("100.00"),
                 coupon_amount=Decimal("20.00"),
                 actual_paid=Decimal("70.00"),

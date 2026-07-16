@@ -9,6 +9,8 @@ from app.modules.partners.models import (
     Contractor,
     ContractorRate,
     ContractorType,
+    Performer,
+    PerformerType,
     SettlementBasis,
     Source,
     SourceRate,
@@ -71,6 +73,55 @@ def resolve_contractor_rate(
     return Decimal(rate.commission_per_order if rate else contractor.default_commission)
 
 
+def get_performer(db: Session, tenant_id: int, performer_id: int) -> Performer:
+    performer = db.scalar(
+        select(Performer).where(
+            Performer.id == performer_id,
+            Performer.tenant_id == tenant_id,
+        )
+    )
+    if not performer:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="实际做单人不存在")
+    return performer
+
+
+def get_or_create_performer(
+    db: Session,
+    *,
+    tenant_id: int,
+    contractor_id: int,
+    performer_type: PerformerType,
+    name: str,
+    is_listed: bool,
+) -> Performer:
+    normalized = normalize_name(name)
+    if not normalized:
+        raise HTTPException(status_code=422, detail="实际做单人姓名不能为空")
+    performer = db.scalar(
+        select(Performer).where(
+            Performer.tenant_id == tenant_id,
+            Performer.performer_type == performer_type.value,
+            Performer.contractor_id == contractor_id,
+            Performer.normalized_name == normalized,
+        )
+    )
+    if performer:
+        if is_listed and not performer.is_listed:
+            performer.is_listed = True
+        return performer
+    performer = Performer(
+        tenant_id=tenant_id,
+        name=name.strip(),
+        normalized_name=normalized,
+        performer_type=performer_type.value,
+        contractor_id=contractor_id,
+        is_listed=is_listed,
+    )
+    db.add(performer)
+    db.flush()
+    return performer
+
+
 def get_or_create_retail(db: Session, tenant_id: int, name: str) -> Contractor:
     normalized = normalize_name(name)
     contractor = db.scalar(
@@ -92,3 +143,66 @@ def get_or_create_retail(db: Session, tenant_id: int, name: str) -> Contractor:
     db.add(contractor)
     db.flush()
     return contractor
+
+
+def resolve_performer_assignment(
+    db: Session,
+    *,
+    tenant_id: int,
+    contractor_type: ContractorType,
+    contractor_id: int | None,
+    performer_id: int | None,
+    performer_name: str | None,
+    save_performer: bool,
+    allow_inactive_contractor_id: int | None = None,
+    allow_inactive_performer_id: int | None = None,
+) -> tuple[Contractor, Performer]:
+    if performer_id is not None:
+        performer = get_performer(db, tenant_id, performer_id)
+        expected_type = (
+            PerformerType.STUDENT
+            if contractor_type == ContractorType.LEADER
+            else PerformerType.RETAIL
+        )
+        if performer.performer_type != expected_type.value:
+            raise HTTPException(status_code=422, detail="实际做单人类型与做单方式不匹配")
+        if contractor_type == ContractorType.LEADER and performer.contractor_id != contractor_id:
+            raise HTTPException(status_code=422, detail="该学生不属于所选学生头子")
+        contractor = get_contractor(db, tenant_id, performer.contractor_id)
+    elif contractor_type == ContractorType.LEADER:
+        if contractor_id is None:
+            raise HTTPException(status_code=422, detail="请选择学生头子")
+        if not performer_name:
+            raise HTTPException(status_code=422, detail="请选择或填写实际做单学生")
+        contractor = get_contractor(db, tenant_id, contractor_id)
+        performer = get_or_create_performer(
+            db,
+            tenant_id=tenant_id,
+            contractor_id=contractor.id,
+            performer_type=PerformerType.STUDENT,
+            name=performer_name,
+            is_listed=save_performer,
+        )
+    else:
+        if not performer_name:
+            raise HTTPException(status_code=422, detail="请选择或填写散户姓名")
+        contractor = get_or_create_retail(db, tenant_id, performer_name)
+        performer = get_or_create_performer(
+            db,
+            tenant_id=tenant_id,
+            contractor_id=contractor.id,
+            performer_type=PerformerType.RETAIL,
+            name=contractor.name,
+            is_listed=save_performer,
+        )
+
+    expected_contractor_type = contractor_type.value
+    if contractor.contractor_type != expected_contractor_type:
+        raise HTTPException(status_code=422, detail="合作方类型与做单方式不匹配")
+    if not contractor.is_active and contractor.id != allow_inactive_contractor_id:
+        raise HTTPException(status_code=422, detail="所选合作方已停用")
+    if not performer.is_active and performer.id != allow_inactive_performer_id:
+        raise HTTPException(status_code=422, detail="实际做单人已停用")
+    if save_performer and not performer.is_listed:
+        performer.is_listed = True
+    return contractor, performer

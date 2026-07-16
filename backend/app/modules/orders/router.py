@@ -4,23 +4,30 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 
 from app.modules.iam.dependencies import CurrentContext, DbSession, require_roles
-from app.modules.iam.models import MemberRole
+from app.modules.iam.models import AuditLog, MemberRole, User
 from app.modules.orders.models import Order, OrderStatus
 from app.modules.orders.schemas import (
     OrderCreate,
+    OrderHistoryItem,
     OrderListOutput,
     OrderOutput,
     OrderStatusUpdate,
     OrderUpdate,
 )
 from app.modules.orders.service import create_order, get_order, transition_order, update_order
-from app.modules.partners.models import Contractor, ContractorType, Source
+from app.modules.partners.models import ContractorType, Source
+from app.modules.points.service import available_coupons, get_point_balance
 
 router = APIRouter(prefix="/orders", tags=["订单"])
 write_roles = (MemberRole.OWNER.value, MemberRole.BOOKKEEPER.value)
 
 
-def _output(order: Order, source_name: str) -> OrderOutput:
+def _output(
+    order: Order,
+    source_name: str,
+    *,
+    point_balance=None,
+) -> OrderOutput:
     return OrderOutput(
         id=order.id,
         order_no=order.order_no,
@@ -31,7 +38,11 @@ def _output(order: Order, source_name: str) -> OrderOutput:
         contractor_id=order.contractor_id,
         contractor_type=order.contractor_type,
         contractor_name=order.contractor_name_snapshot,
+        performer_id=order.performer_id,
+        performer_name=order.performer_name_snapshot,
         student_name=order.student_name,
+        point_balance=point_balance,
+        available_coupons=available_coupons(point_balance) if point_balance is not None else 0,
         order_amount=order.order_amount,
         coupon_amount=order.coupon_amount,
         actual_paid=order.actual_paid,
@@ -39,8 +50,10 @@ def _output(order: Order, source_name: str) -> OrderOutput:
         discount_snapshot=order.discount_snapshot,
         settlement_income=order.settlement_income,
         income_overridden=order.income_overridden,
+        income_override_reason=order.income_override_reason,
         commission=order.commission,
         commission_overridden=order.commission_overridden,
+        commission_override_reason=order.commission_override_reason,
         cost=order.cost,
         profit=order.profit,
         note=order.note,
@@ -53,7 +66,16 @@ def _one_output(db: DbSession, tenant_id: int, order: Order) -> OrderOutput:
     source_name = db.scalar(
         select(Source.name).where(Source.id == order.source_id, Source.tenant_id == tenant_id)
     ) or "已删除放单人"
-    return _output(order, source_name)
+    balance = (
+        get_point_balance(
+            db,
+            tenant_id=tenant_id,
+            performer_id=order.performer_id,
+        )
+        if order.performer_id is not None
+        else None
+    )
+    return _output(order, source_name, point_balance=balance)
 
 
 @router.get("", response_model=OrderListOutput)
@@ -67,6 +89,7 @@ def list_orders(
     order_status: OrderStatus | None = Query(default=None, alias="status"),
     source_id: int | None = None,
     contractor_id: int | None = None,
+    performer_id: int | None = None,
     contractor_type: ContractorType | None = None,
     profit_sign: str | None = Query(default=None, pattern="^(positive|negative|zero)$"),
 ) -> OrderListOutput:
@@ -81,6 +104,8 @@ def list_orders(
         filters.append(Order.source_id == source_id)
     if contractor_id:
         filters.append(Order.contractor_id == contractor_id)
+    if performer_id:
+        filters.append(Order.performer_id == performer_id)
     if contractor_type:
         filters.append(Order.contractor_type == contractor_type.value)
     if profit_sign == "positive":
@@ -110,6 +135,32 @@ def list_orders(
 @router.get("/{order_id}", response_model=OrderOutput)
 def retrieve_order(order_id: int, context: CurrentContext, db: DbSession) -> OrderOutput:
     return _one_output(db, context.tenant_id, get_order(db, context.tenant_id, order_id))
+
+
+@router.get("/{order_id}/history", response_model=list[OrderHistoryItem])
+def list_order_history(order_id: int, context: CurrentContext, db: DbSession) -> list[OrderHistoryItem]:
+    get_order(db, context.tenant_id, order_id)
+    rows = db.execute(
+        select(AuditLog, User.name)
+        .outerjoin(User, User.id == AuditLog.user_id)
+        .where(
+            AuditLog.tenant_id == context.tenant_id,
+            AuditLog.resource_type == "order",
+            AuditLog.resource_id == str(order_id),
+        )
+        .order_by(AuditLog.id.desc())
+    ).all()
+    return [
+        OrderHistoryItem(
+            id=log.id,
+            user_id=log.user_id,
+            user_name=user_name,
+            action=log.action,
+            payload=log.payload,
+            created_at=log.created_at,
+        )
+        for log, user_name in rows
+    ]
 
 
 @router.post("", response_model=OrderOutput, status_code=201)

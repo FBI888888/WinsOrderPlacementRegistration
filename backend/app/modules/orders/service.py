@@ -14,12 +14,12 @@ from app.modules.orders.models import Order, OrderStatus
 from app.modules.orders.schemas import OrderCreate, OrderUpdate
 from app.modules.partners.models import ContractorType
 from app.modules.partners.service import (
-    get_contractor,
-    get_or_create_retail,
     get_source,
     resolve_contractor_rate,
+    resolve_performer_assignment,
     resolve_source_rate,
 )
+from app.modules.points.service import book_order_points, reverse_order_points
 
 
 def get_order(db: Session, tenant_id: int, order_id: int) -> Order:
@@ -35,30 +35,42 @@ def _assignment(
     tenant_id: int,
     contractor_type: ContractorType,
     contractor_id: int | None,
-    retail_name: str | None,
+    performer_id: int | None,
+    performer_name: str | None,
+    save_performer: bool,
     business_date,
     commission_override: Decimal | None,
-) -> tuple[int, str, Decimal, bool]:
-    if contractor_type == ContractorType.LEADER:
-        if not contractor_id:
-            raise HTTPException(status_code=422, detail="请选择学生头子")
-        contractor = get_contractor(db, tenant_id, contractor_id)
-        if contractor.contractor_type != ContractorType.LEADER.value or not contractor.is_active:
-            raise HTTPException(status_code=422, detail="学生头子不可用")
+    allow_inactive_contractor_id: int | None = None,
+    allow_inactive_performer_id: int | None = None,
+) -> tuple[int, str, int, str, Decimal, bool]:
+    contractor, performer = resolve_performer_assignment(
+        db,
+        tenant_id=tenant_id,
+        contractor_type=contractor_type,
+        contractor_id=contractor_id,
+        performer_id=performer_id,
+        performer_name=performer_name,
+        save_performer=save_performer,
+        allow_inactive_contractor_id=allow_inactive_contractor_id,
+        allow_inactive_performer_id=allow_inactive_performer_id,
+    )
+    if contractor_type == ContractorType.RETAIL:
+        if commission_override is None:
+            raise HTTPException(status_code=422, detail="请填写散户佣金")
+        commission = commission_override
+        commission_overridden = True
+    else:
         configured = resolve_contractor_rate(db, tenant_id, contractor.id, business_date)
-        return (
-            contractor.id,
-            contractor.name,
-            commission_override if commission_override is not None else configured,
-            commission_override is not None,
-        )
-
-    if not retail_name:
-        raise HTTPException(status_code=422, detail="请填写散户姓名")
-    if commission_override is None:
-        raise HTTPException(status_code=422, detail="请填写散户佣金")
-    contractor = get_or_create_retail(db, tenant_id, retail_name)
-    return contractor.id, contractor.name, commission_override, True
+        commission = commission_override if commission_override is not None else configured
+        commission_overridden = commission_override is not None
+    return (
+        contractor.id,
+        contractor.name,
+        performer.id,
+        performer.name,
+        commission,
+        commission_overridden,
+    )
 
 
 def _financial_values(
@@ -69,25 +81,41 @@ def _financial_values(
     source_id: int,
     contractor_type: ContractorType,
     contractor_id: int | None,
-    retail_name: str | None,
+    performer_id: int | None,
+    performer_name: str | None,
+    save_performer: bool,
     order_amount: Decimal,
     coupon_amount: Decimal,
     actual_paid: Decimal,
     settlement_income_override: Decimal | None,
     commission_override: Decimal | None,
+    allow_inactive_source_id: int | None = None,
+    allow_inactive_contractor_id: int | None = None,
+    allow_inactive_performer_id: int | None = None,
 ) -> dict:
     source = get_source(db, tenant_id, source_id)
-    if not source.is_active:
+    if not source.is_active and source.id != allow_inactive_source_id:
         raise HTTPException(status_code=422, detail="放单人员已停用")
     basis, discount = resolve_source_rate(db, tenant_id, source_id, business_date)
-    final_contractor_id, contractor_name, commission, commission_overridden = _assignment(
+    (
+        final_contractor_id,
+        contractor_name,
+        final_performer_id,
+        final_performer_name,
+        commission,
+        commission_overridden,
+    ) = _assignment(
         db,
         tenant_id=tenant_id,
         contractor_type=contractor_type,
         contractor_id=contractor_id,
-        retail_name=retail_name,
+        performer_id=performer_id,
+        performer_name=performer_name,
+        save_performer=save_performer,
         business_date=business_date,
         commission_override=commission_override,
+        allow_inactive_contractor_id=allow_inactive_contractor_id,
+        allow_inactive_performer_id=allow_inactive_performer_id,
     )
     try:
         amounts = calculate_order_amounts(
@@ -104,6 +132,8 @@ def _financial_values(
     return {
         "contractor_id": final_contractor_id,
         "contractor_name_snapshot": contractor_name,
+        "performer_id": final_performer_id,
+        "performer_name_snapshot": final_performer_name,
         "settlement_basis_snapshot": basis.value,
         "discount_snapshot": discount,
         "settlement_income": amounts.settlement_income,
@@ -154,6 +184,7 @@ def _book_success(db: Session, order: Order, user_id: int) -> None:
         order_id=order.id,
         note=f"订单 {order.order_no} 放单收入",
     )
+    book_order_points(db, order=order, user_id=user_id)
     order.status = OrderStatus.SUCCESS.value
     order.success_at = datetime.now(timezone.utc)
 
@@ -166,7 +197,9 @@ def create_order(db: Session, *, tenant_id: int, user_id: int, data: OrderCreate
         source_id=data.source_id,
         contractor_type=data.contractor_type,
         contractor_id=data.contractor_id,
-        retail_name=data.retail_name,
+        performer_id=data.performer_id,
+        performer_name=data.performer_name,
+        save_performer=data.save_performer,
         order_amount=data.order_amount,
         coupon_amount=data.coupon_amount,
         actual_paid=data.actual_paid,
@@ -180,7 +213,11 @@ def create_order(db: Session, *, tenant_id: int, user_id: int, data: OrderCreate
         status=OrderStatus.DRAFT.value,
         source_id=data.source_id,
         contractor_type=data.contractor_type.value,
-        student_name=data.student_name,
+        student_name=(
+            financial["performer_name_snapshot"]
+            if data.contractor_type == ContractorType.LEADER
+            else None
+        ),
         order_amount=data.order_amount,
         coupon_amount=data.coupon_amount,
         actual_paid=data.actual_paid,
@@ -213,19 +250,46 @@ def create_order(db: Session, *, tenant_id: int, user_id: int, data: OrderCreate
 def update_order(
     db: Session, *, tenant_id: int, user_id: int, order_id: int, data: OrderUpdate
 ) -> Order:
+    from app.modules.settlements.service import ensure_order_not_locked
+
     order = get_order(db, tenant_id, order_id)
-    if order.status not in (OrderStatus.DRAFT.value, OrderStatus.DISPATCHED.value):
-        raise HTTPException(status_code=409, detail="已成功、取消或冲正的订单不能直接修改")
+    ensure_order_not_locked(db, tenant_id=tenant_id, order_id=order.id)
 
     changes = data.model_dump(exclude_unset=True)
     business_date = changes.get("business_date", order.business_date)
     source_id = changes.get("source_id", order.source_id)
     contractor_type = ContractorType(changes.get("contractor_type", order.contractor_type))
     contractor_id = changes.get("contractor_id", order.contractor_id)
-    retail_name = changes.get(
-        "retail_name",
-        order.contractor_name_snapshot if contractor_type == ContractorType.RETAIL else None,
+    assignment_changed = any(
+        key in changes
+        for key in (
+            "contractor_type",
+            "contractor_id",
+            "performer_id",
+            "performer_name",
+            "retail_name",
+            "student_name",
+        )
     )
+    if assignment_changed:
+        performer_id = changes.get("performer_id")
+        performer_name = changes.get("performer_name")
+        if performer_name is None:
+            legacy_key = (
+                "student_name" if contractor_type == ContractorType.LEADER else "retail_name"
+            )
+            performer_name = changes.get(legacy_key)
+        if (
+            performer_id is None
+            and not performer_name
+            and contractor_type.value == order.contractor_type
+            and contractor_id == order.contractor_id
+        ):
+            performer_id = order.performer_id
+    else:
+        performer_id = order.performer_id
+        performer_name = None
+    save_performer = changes.get("save_performer", True)
     order_amount = changes.get("order_amount", Decimal(order.order_amount))
     coupon_amount = changes.get("coupon_amount", Decimal(order.coupon_amount))
     actual_paid = changes.get("actual_paid", Decimal(order.actual_paid))
@@ -239,6 +303,20 @@ def update_order(
         if "commission_override" in changes
         else (Decimal(order.commission) if order.commission_overridden else None)
     )
+    income_override_reason = (
+        changes.get("income_override_reason", order.income_override_reason)
+        if income_override is not None
+        else None
+    )
+    commission_override_reason = (
+        changes.get("commission_override_reason", order.commission_override_reason)
+        if commission_override is not None
+        else None
+    )
+    if income_override is not None and not income_override_reason:
+        raise HTTPException(status_code=422, detail="覆盖结算收入时必须填写原因")
+    if commission_override is not None and not commission_override_reason:
+        raise HTTPException(status_code=422, detail="覆盖佣金时必须填写原因")
     financial = _financial_values(
         db,
         tenant_id=tenant_id,
@@ -246,27 +324,60 @@ def update_order(
         source_id=source_id,
         contractor_type=contractor_type,
         contractor_id=contractor_id,
-        retail_name=retail_name,
+        performer_id=performer_id,
+        performer_name=performer_name,
+        save_performer=save_performer,
         order_amount=order_amount,
         coupon_amount=coupon_amount,
         actual_paid=actual_paid,
         settlement_income_override=income_override,
         commission_override=commission_override,
+        allow_inactive_source_id=order.source_id,
+        allow_inactive_contractor_id=order.contractor_id,
+        allow_inactive_performer_id=order.performer_id,
     )
+    previous_status = OrderStatus(order.status)
+    previous_success_at = order.success_at
+    if previous_status == OrderStatus.SUCCESS:
+        reverse_order_entries(
+            db,
+            tenant_id=tenant_id,
+            order_id=order.id,
+            user_id=user_id,
+            business_date=business_date,
+            note=f"订单 {order.order_no} 编辑前流水冲销",
+        )
+        reverse_order_points(
+            db,
+            order=order,
+            user_id=user_id,
+            business_date=business_date,
+            note=f"订单 {order.order_no} 编辑前积分冲销",
+        )
+
     order.business_date = business_date
     order.source_id = source_id
     order.contractor_type = contractor_type.value
-    order.student_name = changes.get("student_name", order.student_name)
+    order.student_name = (
+        financial["performer_name_snapshot"]
+        if contractor_type == ContractorType.LEADER
+        else None
+    )
     order.order_amount = order_amount
     order.coupon_amount = coupon_amount
     order.actual_paid = actual_paid
-    order.income_override_reason = changes.get("income_override_reason", order.income_override_reason)
-    order.commission_override_reason = changes.get(
-        "commission_override_reason", order.commission_override_reason
-    )
+    order.income_override_reason = income_override_reason
+    order.commission_override_reason = commission_override_reason
     order.note = changes.get("note", order.note)
     for key, value in financial.items():
         setattr(order, key, value)
+
+    if previous_status == OrderStatus.SUCCESS:
+        _book_success(db, order, user_id)
+        order.success_at = previous_success_at
+    else:
+        order.status = previous_status.value
+
     record_audit(
         db,
         tenant_id=tenant_id,
@@ -314,6 +425,13 @@ def transition_order(
             user_id=user_id,
             business_date=order.business_date,
             note=reason or "订单冲正",
+        )
+        reverse_order_points(
+            db,
+            order=order,
+            user_id=user_id,
+            business_date=order.business_date,
+            note=reason or "订单积分冲正",
         )
         order.status = target.value
     else:

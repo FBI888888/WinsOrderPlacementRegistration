@@ -2,6 +2,8 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 
+from enum import StrEnum
+
 from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -68,3 +70,31 @@ class ContractorRate(Base, IdMixin, TimestampMixin, TenantOwnedMixin):
     contractor_id: Mapped[int] = mapped_column(ForeignKey("contractors.id"), nullable=False, index=True)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     commission_per_order: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+
+class PerformerType(StrEnum):
+    RETAIL = "RETAIL"
+    STUDENT = "STUDENT"
+
+
+class Performer(Base, IdMixin, TimestampMixin, TenantOwnedMixin):
+    __tablename__ = "performers"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "performer_type",
+            "contractor_id",
+            "normalized_name",
+            name="uq_performers_identity",
+        ),
+    )
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    performer_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    contractor_id: Mapped[int] = mapped_column(
+        ForeignKey("contractors.id"), nullable=False, index=True
+    )
+    is_listed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500))
