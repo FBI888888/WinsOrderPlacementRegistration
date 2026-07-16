@@ -46,6 +46,7 @@ def create_student_order(
     leader_id: int,
     student_name: str,
     order_amount: str = "300",
+    actual_paid: str | None = None,
     status: str = "SUCCESS",
     save_performer: bool = True,
 ) -> dict:
@@ -61,7 +62,7 @@ def create_student_order(
             "save_performer": save_performer,
             "order_amount": order_amount,
             "coupon_amount": "0",
-            "actual_paid": order_amount,
+            "actual_paid": actual_paid or order_amount,
             "status": status,
         },
     )
@@ -104,6 +105,27 @@ def test_success_order_earns_points_and_coupon_can_be_redeemed(
     assert insufficient.status_code == 409
 
 
+def test_points_are_calculated_from_actual_paid_amount(
+    client: TestClient, auth_headers: dict[str, str]
+):
+    source_id = create_source(client, auth_headers)
+    leader_id = create_leader(client, auth_headers, "实付积分头子")
+    order = create_student_order(
+        client,
+        auth_headers,
+        source_id=source_id,
+        leader_id=leader_id,
+        student_name="实付积分学生",
+        order_amount="300",
+        actual_paid="250",
+    )
+
+    assert order["order_amount"] == "300.00"
+    assert order["actual_paid"] == "250.00"
+    assert order["point_balance"] == "500.00"
+    assert order["available_coupons"] == 0
+
+
 def test_success_order_edit_rebuilds_points_and_reversal_removes_them(
     client: TestClient, auth_headers: dict[str, str]
 ):
@@ -122,7 +144,7 @@ def test_success_order_edit_rebuilds_points_and_reversal_removes_them(
     updated = client.patch(
         f"/api/v1/orders/{order['id']}",
         headers=auth_headers,
-        json={"order_amount": "120", "actual_paid": "120"},
+        json={"order_amount": "150", "actual_paid": "120"},
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["point_balance"] == "240.00"

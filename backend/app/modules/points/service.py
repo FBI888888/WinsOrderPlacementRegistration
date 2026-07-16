@@ -15,8 +15,8 @@ COUPON_REDEMPTION_POINTS = Decimal("600")
 COUPON_VALUE = Decimal("30")
 
 
-def points_for_order(order_amount: Decimal) -> Decimal:
-    return (Decimal(order_amount) * POINTS_PER_CURRENCY).quantize(Decimal("0.01"))
+def points_for_payment(actual_paid: Decimal) -> Decimal:
+    return (Decimal(actual_paid) * POINTS_PER_CURRENCY).quantize(Decimal("0.01"))
 
 
 def get_point_balance(db: Session, *, tenant_id: int, performer_id: int) -> Decimal:
@@ -44,7 +44,7 @@ def book_order_points(db: Session, *, order: Order, user_id: int) -> PointEntry 
         business_date=order.business_date,
         performer_id=order.performer_id,
         entry_type=PointEntryType.ORDER_EARN.value,
-        amount=points_for_order(Decimal(order.order_amount)),
+        amount=points_for_payment(Decimal(order.actual_paid)),
         order_id=order.id,
         event_key=f"order:{order.id}:{order.point_revision}:earn",
         note=f"订单 {order.order_no} 积分",
