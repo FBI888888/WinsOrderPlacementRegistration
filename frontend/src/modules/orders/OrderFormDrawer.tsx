@@ -1,4 +1,5 @@
-import { Alert, AutoComplete, Checkbox, Col, DatePicker, Divider, Drawer, Form, Input, Radio, Row, Select, Space, Statistic, Typography } from 'antd'
+import { Alert, AutoComplete, Checkbox, Col, DatePicker, Divider, Drawer, Dropdown, Form, Input, Radio, Row, Select, Space, Statistic, Typography } from 'antd'
+import type { InputNumberProps } from 'antd'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { MoneyInput } from '../../shared/components'
@@ -7,6 +8,24 @@ import type { Contractor, ContractorType, Order, Performer, Source } from '../..
 import { calculateDefaultActualPaid, calculateOrderPreview } from './calculations'
 
 const normalizeName = (value?: string) => value?.trim().toLocaleLowerCase().replace(/\s+/g, ' ') ?? ''
+
+const couponPresets = [10, 30, 50]
+
+function CouponAmountInput(props: InputNumberProps) {
+  return (
+    <Dropdown
+      trigger={['click']}
+      menu={{
+        items: couponPresets.map((amount) => ({ key: String(amount), label: `${amount}元` })),
+        onClick: ({ key }) => props.onChange?.(Number(key)),
+      }}
+    >
+      <div className="full-width">
+        <MoneyInput {...props} />
+      </div>
+    </Dropdown>
+  )
+}
 
 export interface OrderFormValues {
   business_date: ReturnType<typeof dayjs>
@@ -303,7 +322,7 @@ export function OrderFormDrawer({
                 }),
               ]}
             >
-              <MoneyInput />
+              <CouponAmountInput />
             </Form.Item>
           </Col>
           <Col xs={24} sm={8}>
