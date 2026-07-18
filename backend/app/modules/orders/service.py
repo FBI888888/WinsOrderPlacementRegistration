@@ -256,6 +256,50 @@ def update_order(
     ensure_order_not_locked(db, tenant_id=tenant_id, order_id=order.id)
 
     changes = data.model_dump(exclude_unset=True)
+    recalculation_fields = {
+        "business_date",
+        "source_id",
+        "contractor_type",
+        "contractor_id",
+        "performer_id",
+        "performer_name",
+        "save_performer",
+        "retail_name",
+        "student_name",
+        "order_amount",
+        "coupon_amount",
+        "actual_paid",
+        "settlement_income_override",
+        "commission_override",
+    }
+    if not recalculation_fields.intersection(changes):
+        income_reason = changes.get("income_override_reason", order.income_override_reason)
+        commission_reason = changes.get(
+            "commission_override_reason", order.commission_override_reason
+        )
+        if order.income_overridden and not income_reason:
+            raise HTTPException(status_code=422, detail="覆盖结算收入时必须填写原因")
+        if order.commission_overridden and not commission_reason:
+            raise HTTPException(status_code=422, detail="覆盖佣金时必须填写原因")
+        order.income_override_reason = income_reason if order.income_overridden else None
+        order.commission_override_reason = (
+            commission_reason if order.commission_overridden else None
+        )
+        if "note" in changes:
+            order.note = changes["note"]
+        record_audit(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            action="order.updated",
+            resource_type="order",
+            resource_id=order.id,
+            payload=data.model_dump(exclude_unset=True, mode="json"),
+        )
+        db.commit()
+        db.refresh(order)
+        return order
+
     business_date = changes.get("business_date", order.business_date)
     source_id = changes.get("source_id", order.source_id)
     contractor_type = ContractorType(changes.get("contractor_type", order.contractor_type))

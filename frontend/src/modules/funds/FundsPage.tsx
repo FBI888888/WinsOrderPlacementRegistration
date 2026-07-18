@@ -1,12 +1,12 @@
-import { PlusOutlined, WalletOutlined } from '@ant-design/icons'
+import { FileSearchOutlined, PlusOutlined, WalletOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, Col, DatePicker, Form, Input, Modal, Row, Select, Space, Statistic, Switch, Table, Tag } from 'antd'
+import { App, Button, Card, Col, DatePicker, Drawer, Form, Input, Modal, Row, Select, Space, Statistic, Switch, Table, Tag, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { api, errorMessage } from '../../shared/api'
 import { Money, MoneyInput, PageTitle } from '../../shared/components'
 import { statusText } from '../../shared/format'
-import type { Balance, Contractor, LedgerEntry, Source } from '../../shared/types'
+import type { Balance, ClearingPreviewItem, Contractor, LedgerEntry, Source } from '../../shared/types'
 
 const entryText: Record<string, string> = {
   ADVANCE_TOPUP: '垫资/补款', ORDER_PAYMENT: '订单实付', ADVANCE_RETURN: '退回垫资',
@@ -17,7 +17,7 @@ const entryText: Record<string, string> = {
 type PartyKind = 'contractor' | 'source'
 
 export function FundsPage() {
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm()
@@ -25,6 +25,9 @@ export function FundsPage() {
   const [partyKind, setPartyKind] = useState<PartyKind>('contractor')
   const [partyId, setPartyId] = useState<number>()
   const [showAllBalances, setShowAllBalances] = useState(false)
+  const [clearingPreview, setClearingPreview] = useState<ClearingPreviewItem[]>([])
+  const [batchClearingOpen, setBatchClearingOpen] = useState(false)
+  const [logTarget, setLogTarget] = useState<Balance>()
 
   const balances = useQuery({ queryKey: ['fund-balances'], queryFn: () => api.get<Balance[]>('/funds/balances').then((res) => res.data) })
   const contractors = useQuery({ queryKey: ['contractors', 'all'], queryFn: () => api.get<Contractor[]>('/partners/contractors').then((res) => res.data) })
@@ -63,6 +66,19 @@ export function FundsPage() {
     enabled: Boolean(entryParams),
   })
 
+  const logParams = useMemo(() => {
+    if (!logTarget) return undefined
+    return logTarget.account === 'SOURCE_RECEIVABLE'
+      ? { account: logTarget.account, source_id: logTarget.counterparty_id }
+      : { account: logTarget.account, contractor_id: logTarget.counterparty_id }
+  }, [logTarget])
+
+  const logEntries = useQuery({
+    queryKey: ['fund-balance-log', logParams],
+    queryFn: () => api.get<LedgerEntry[]>('/funds/entries', { params: logParams }).then((res) => res.data),
+    enabled: Boolean(logParams),
+  })
+
   const names = useMemo(() => ({
     contractors: new Map(contractors.data?.map((item) => [item.id, item.name])),
     sources: new Map(sources.data?.map((item) => [item.id, item.name])),
@@ -70,8 +86,13 @@ export function FundsPage() {
 
   const personBalances = useMemo(() => {
     if (!partyId || !balances.data) return []
-    return balances.data.filter((item) => item.counterparty_id === partyId)
-  }, [balances.data, partyId])
+    return balances.data.filter((item) => {
+      if (item.counterparty_id !== partyId) return false
+      return partyKind === 'contractor'
+        ? item.account !== 'SOURCE_RECEIVABLE'
+        : item.account === 'SOURCE_RECEIVABLE'
+    })
+  }, [balances.data, partyId, partyKind])
 
   const totals = useMemo(() => {
     const result = { ADVANCE: 0, COMMISSION_PAYABLE: 0, SOURCE_RECEIVABLE: 0 }
@@ -79,6 +100,19 @@ export function FundsPage() {
     return result
   }, [personBalances])
 
+  const commissionBalanceByContractor = useMemo(
+    () => new Map(
+      (balances.data ?? [])
+        .filter((item) => item.account === 'COMMISSION_PAYABLE')
+        .map((item) => [item.counterparty_id, Number(item.balance)]),
+    ),
+    [balances.data],
+  )
+
+  const selectedClearingBalance = partyKind === 'contractor'
+    ? totals.COMMISSION_PAYABLE
+    : totals.SOURCE_RECEIVABLE
+  const netSettlement = totals.ADVANCE - totals.COMMISSION_PAYABLE
   const balanceTableData = showAllBalances ? (balances.data ?? []) : personBalances
 
   const selectedName = partyKind === 'contractor'
@@ -98,11 +132,63 @@ export function FundsPage() {
     onError: (error) => message.error(errorMessage(error)),
   })
 
+  const clearMutation = useMutation({
+    mutationFn: () => api.post('/settlements/clear', {
+      settlement_type: partyKind === 'contractor' ? 'CONTRACTOR' : 'SOURCE',
+      counterparty_id: partyId,
+      business_date: dayjs().format('YYYY-MM-DD'),
+    }),
+    onSuccess: async () => {
+      message.success('当前往来对象已结清')
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['fund-entries'] }),
+        queryClient.invalidateQueries({ queryKey: ['fund-balances'] }),
+        queryClient.invalidateQueries({ queryKey: ['settlements'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      ])
+    },
+    onError: (error) => message.error(errorMessage(error, '结清失败')),
+  })
+
+  const openBatchClearing = async () => {
+    try {
+      const response = await api.get<ClearingPreviewItem[]>('/settlements/clearing-preview')
+      setClearingPreview(response.data)
+      setBatchClearingOpen(true)
+    } catch (error) {
+      message.error(errorMessage(error, '读取待结清余额失败'))
+    }
+  }
+
+  const batchClearMutation = useMutation({
+    mutationFn: () => api.post('/settlements/clear-batch', { business_date: dayjs().format('YYYY-MM-DD') }),
+    onSuccess: async () => {
+      message.success('批量结清已完成')
+      setBatchClearingOpen(false)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['fund-entries'] }),
+        queryClient.invalidateQueries({ queryKey: ['fund-balances'] }),
+        queryClient.invalidateQueries({ queryKey: ['settlements'] }),
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
+      ])
+    },
+    onError: (error) => message.error(errorMessage(error, '批量结清失败')),
+  })
+
   const mutedStyle = { opacity: 0.45 }
 
   return (
     <div className="page-stack">
-      <PageTitle title="资金流水" description="垫资余额、佣金应付和放单应收分别核算；资金进出不会直接改变订单利润。" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>登记资金</Button>} />
+      <PageTitle
+        title="资金流水"
+        description="垫资余额、佣金应付和放单应收分别核算；结清通过追加反向流水完成，历史记录不会删除。"
+        extra={(
+          <Space>
+            <Button onClick={() => void openBatchClearing()}>当日批量结清</Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>登记资金</Button>
+          </Space>
+        )}
+      />
       <Card size="small">
         <Space wrap>
           <span>往来对象</span>
@@ -139,10 +225,20 @@ export function FundsPage() {
             }
           />
           {selectedName && <Tag>{selectedName}</Tag>}
+          <Button
+            disabled={!partyId || selectedClearingBalance <= 0}
+            loading={clearMutation.isPending}
+            onClick={() => modal.confirm({
+              title: `结清「${selectedName ?? ''}」当前余额？`,
+              content: `本次将结清 ${partyKind === 'contractor' ? '待付佣金' : '放单应收'} ¥${selectedClearingBalance.toFixed(2)}，并生成可冲正的结算记录。`,
+              okText: '确认结清',
+              onOk: () => clearMutation.mutateAsync(),
+            })}
+          >立即结清</Button>
         </Space>
       </Card>
       <Row gutter={[16, 16]}>
-        <Col xs={24} md={8}>
+        <Col xs={24} md={6}>
           <Card className="metric-card" style={partyKind === 'source' ? mutedStyle : undefined}>
             <Statistic
               title="垫资可用余额"
@@ -152,7 +248,7 @@ export function FundsPage() {
             />
           </Card>
         </Col>
-        <Col xs={24} md={8}>
+        <Col xs={24} md={6}>
           <Card className="metric-card" style={partyKind === 'source' ? mutedStyle : undefined}>
             <Statistic
               title="待付佣金"
@@ -161,12 +257,21 @@ export function FundsPage() {
             />
           </Card>
         </Col>
-        <Col xs={24} md={8}>
+        <Col xs={24} md={6}>
           <Card className="metric-card" style={partyKind === 'contractor' ? mutedStyle : undefined}>
             <Statistic
               title="放单应收"
               value={partyKind === 'source' ? totals.SOURCE_RECEIVABLE : 0}
               formatter={(value) => partyKind === 'source' ? <Money value={Number(value)} /> : '—'}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={6}>
+          <Card className="metric-card" style={partyKind === 'source' ? mutedStyle : undefined}>
+            <Statistic
+              title="扣佣待结算"
+              value={partyKind === 'contractor' ? netSettlement : 0}
+              formatter={(value) => partyKind === 'contractor' ? <Money value={Number(value)} signed /> : '—'}
             />
           </Card>
         </Col>
@@ -184,6 +289,18 @@ export function FundsPage() {
           { title: '账户', dataIndex: 'account', render: (value) => ({ ADVANCE: '垫资余额', COMMISSION_PAYABLE: '佣金应付', SOURCE_RECEIVABLE: '放单应收' }[value as string]) },
           { title: '往来对象', dataIndex: 'counterparty_name' },
           { title: '余额', dataIndex: 'balance', align: 'right', render: (value, item) => <Money value={value} signed={item.account === 'ADVANCE'} /> },
+          {
+            title: '扣佣待结算', align: 'right',
+            render: (_, item) => item.account === 'ADVANCE'
+              ? <Money value={Number(item.balance) - (commissionBalanceByContractor.get(item.counterparty_id) ?? 0)} signed />
+              : '—',
+          },
+          {
+            title: '日志', width: 90,
+            render: (_, item) => (
+              <Button type="link" icon={<FileSearchOutlined />} onClick={() => setLogTarget(item)}>查看</Button>
+            ),
+          },
         ]} />
       </Card>
       <Card title={selectedName ? `最近流水 · ${selectedName}` : '最近流水'}>
@@ -196,6 +313,58 @@ export function FundsPage() {
           { title: '变动金额', dataIndex: 'amount', align: 'right', width: 140, render: (value) => <Money value={value} signed /> },
         ]} />
       </Card>
+
+      <Drawer
+        title={logTarget ? `余额日志 · ${logTarget.counterparty_name}` : '余额日志'}
+        width={720}
+        open={Boolean(logTarget)}
+        onClose={() => setLogTarget(undefined)}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">
+          {logTarget ? `账户：${logTarget.account === 'ADVANCE' ? '垫资余额' : logTarget.account === 'COMMISSION_PAYABLE' ? '佣金应付' : '放单应收'} · 当前余额：${logTarget.balance}` : ''}
+        </Typography.Paragraph>
+        <Table<LedgerEntry>
+          rowKey="id"
+          dataSource={logEntries.data ?? []}
+          loading={logEntries.isLoading}
+          pagination={{ pageSize: 15 }}
+          scroll={{ x: 700 }}
+          locale={{ emptyText: '暂无流水日志' }}
+          columns={[
+            { title: '日期', dataIndex: 'business_date', width: 110 },
+            { title: '类型', dataIndex: 'entry_type', width: 130, render: (value) => <Tag>{entryText[value] ?? value}</Tag> },
+            { title: '关联订单', dataIndex: 'order_id', width: 110, render: (value) => value ? `#${value}` : '—' },
+            { title: '备注', dataIndex: 'note', render: (value) => value || '—' },
+            { title: '变动金额', dataIndex: 'amount', align: 'right', width: 130, render: (value) => <Money value={value} signed /> },
+          ]}
+        />
+      </Drawer>
+
+      <Modal
+        title="确认当日批量结清"
+        open={batchClearingOpen}
+        onCancel={() => setBatchClearingOpen(false)}
+        onOk={() => batchClearMutation.mutate()}
+        confirmLoading={batchClearMutation.isPending}
+        okText="确认全部结清"
+        okButtonProps={{ disabled: clearingPreview.length === 0 }}
+      >
+        <Typography.Paragraph type="secondary">
+          系统将按往来对象分别生成结算记录，并追加反向流水。垫资可用余额不会被清空。
+        </Typography.Paragraph>
+        <Table<ClearingPreviewItem>
+          rowKey={(item) => `${item.account}-${item.counterparty_id}`}
+          dataSource={clearingPreview}
+          pagination={false}
+          locale={{ emptyText: '当前没有待结清余额' }}
+          columns={[
+            { title: '对象', dataIndex: 'counterparty_name' },
+            { title: '账户', dataIndex: 'account', render: (value) => value === 'COMMISSION_PAYABLE' ? '待付佣金' : '放单应收' },
+            { title: '待结清', dataIndex: 'balance', align: 'right', render: (value) => <Money value={value} /> },
+          ]}
+        />
+      </Modal>
 
       <Modal title="登记资金流水" open={open} onCancel={() => setOpen(false)} onOk={() => form.submit()} confirmLoading={mutation.isPending}>
         <Form form={form} layout="vertical" requiredMark={false} onFinish={(values) => mutation.mutate(values)} initialValues={{ business_date: dayjs(), transaction_type: 'ADVANCE_TOPUP' }}>

@@ -42,7 +42,7 @@ export function SettlementsPage() {
 
   return (
     <div className="page-stack">
-      <PageTitle title="结算中心" description="先生成草稿核对，确认后锁定关联订单。冲正结算只解锁历史，不会删除资金流水。" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>生成结算单</Button>} />
+      <PageTitle title="结算中心" description="结算确认后会锁定关联订单，并追加资金清账流水；冲正会恢复余额并解锁订单。" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>生成结算单</Button>} />
       <Card>
         <Table<Settlement> rowKey="id" loading={settlements.isLoading} dataSource={settlements.data} scroll={{ x: 1200 }} pagination={{ pageSize: 15 }} columns={[
           { title: '结算单号', dataIndex: 'settlement_no', width: 190, render: (value) => <span className="mono">{value}</span> },
@@ -50,11 +50,14 @@ export function SettlementsPage() {
           { title: '往来对象', dataIndex: 'counterparty_name_snapshot', width: 140 },
           { title: '期间', width: 210, render: (_, item) => `${item.date_from} 至 ${item.date_to}` },
           { title: '订单数', dataIndex: 'order_count', width: 90, align: 'right' },
+          { title: '清账账户', dataIndex: 'account', width: 110, render: (value) => value === 'COMMISSION_PAYABLE' ? '待付佣金' : value === 'SOURCE_RECEIVABLE' ? '放单应收' : '历史记录' },
+          { title: '结清金额', dataIndex: 'settled_amount', width: 120, align: 'right', render: (value) => <Money value={value} /> },
           { title: '结算收入', dataIndex: 'settlement_income_total', width: 120, align: 'right', render: (value) => <Money value={value} /> },
           { title: '实付', dataIndex: 'actual_paid_total', width: 110, align: 'right', render: (value) => <Money value={value} /> },
           { title: '佣金', dataIndex: 'commission_total', width: 100, align: 'right', render: (value) => <Money value={value} /> },
           { title: '利润', dataIndex: 'profit_total', width: 120, align: 'right', render: (value) => <Money value={value} signed /> },
           { title: '状态', dataIndex: 'status', width: 100, render: (value) => <StatusTag value={value} /> },
+          { title: '确认时间', dataIndex: 'confirmed_at', width: 170, render: (value) => value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—' },
           {
             title: '', fixed: 'right', width: 170,
             render: (_, item) => (

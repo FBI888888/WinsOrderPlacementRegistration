@@ -35,6 +35,7 @@ class LedgerEntry(Base, IdMixin, TimestampMixin, TenantOwnedMixin):
     contractor_id: Mapped[int | None] = mapped_column(ForeignKey("contractors.id"), index=True)
     source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), index=True)
     order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), index=True)
+    settlement_id: Mapped[int | None] = mapped_column(ForeignKey("settlements.id"), index=True)
     reversed_entry_id: Mapped[int | None] = mapped_column(ForeignKey("ledger_entries.id"))
     note: Mapped[str | None] = mapped_column(String(500))
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)

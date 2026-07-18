@@ -14,6 +14,7 @@ from app.modules.iam.audit import record_audit
 from app.modules.iam.dependencies import CurrentContext, DbSession, require_roles
 from app.modules.iam.models import MemberRole
 from app.modules.orders.models import Order, OrderStatus
+from app.modules.orders.query import build_order_filters
 from app.modules.partners.models import ContractorType, Source
 from app.modules.reports.models import ExportLog, ExportTemplate
 from app.modules.reports.schemas import (
@@ -21,6 +22,10 @@ from app.modules.reports.schemas import (
     ExportLogOutput,
     ExportTemplateCreate,
     ExportTemplateOutput,
+    PerformanceDailyRow,
+    PerformanceGroupRow,
+    PerformanceReport,
+    PerformanceSummary,
 )
 
 router = APIRouter(prefix="/reports", tags=["报表与导出"])
@@ -99,6 +104,209 @@ def dashboard(
     )
 
 
+def _decimal(value) -> Decimal:
+    return Decimal(value or 0)
+
+
+def _performance_metrics():
+    return (
+        func.count(Order.id),
+        func.coalesce(func.sum(Order.order_amount), 0),
+        func.coalesce(func.sum(Order.coupon_amount), 0),
+        func.coalesce(func.sum(Order.actual_paid), 0),
+        func.coalesce(func.sum(Order.settlement_income), 0),
+        func.coalesce(func.sum(Order.cost), 0),
+        func.coalesce(func.sum(Order.commission), 0),
+        func.coalesce(func.sum(Order.profit), 0),
+        func.coalesce(func.sum(case((Order.profit < 0, 1), else_=0)), 0),
+    )
+
+
+def _performance_group(
+    db,
+    *,
+    base_filters: list,
+    group_type: str,
+    entity_id_column,
+    entity_name_column,
+    extra_filters: list | None = None,
+    join_source: bool = False,
+) -> list[PerformanceGroupRow]:
+    filters = [*base_filters, *(extra_filters or [])]
+    query = select(
+        entity_id_column,
+        entity_name_column,
+        func.count(Order.id),
+        func.coalesce(func.sum(Order.order_amount), 0),
+        func.coalesce(func.sum(Order.coupon_amount), 0),
+        func.coalesce(func.sum(Order.actual_paid), 0),
+        func.coalesce(func.sum(Order.settlement_income), 0),
+        func.coalesce(func.sum(Order.cost), 0),
+        func.coalesce(func.sum(Order.commission), 0),
+        func.coalesce(func.sum(Order.profit), 0),
+    )
+    if join_source:
+        query = query.join(Source, Source.id == Order.source_id)
+    rows = db.execute(
+        query.where(*filters)
+        .group_by(entity_id_column, entity_name_column)
+        .order_by(func.sum(Order.profit).desc(), entity_name_column)
+    ).all()
+    return [
+        PerformanceGroupRow(
+            group_type=group_type,
+            entity_id=entity_id,
+            entity_name=entity_name or "未命名",
+            order_count=order_count,
+            order_amount=_decimal(order_amount),
+            coupon_amount=_decimal(coupon_amount),
+            actual_paid=_decimal(actual_paid),
+            settlement_income=_decimal(settlement_income),
+            cost=_decimal(cost),
+            commission=_decimal(commission),
+            profit=_decimal(profit),
+        )
+        for (
+            entity_id,
+            entity_name,
+            order_count,
+            order_amount,
+            coupon_amount,
+            actual_paid,
+            settlement_income,
+            cost,
+            commission,
+            profit,
+        ) in rows
+    ]
+
+
+@router.get("/performance", response_model=PerformanceReport)
+def performance_report(
+    context: CurrentContext,
+    db: DbSession,
+    date_from: date = Query(default_factory=date.today),
+    date_to: date = Query(default_factory=date.today),
+) -> PerformanceReport:
+    if date_from > date_to:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    base_filters = [
+        Order.tenant_id == context.tenant_id,
+        Order.business_date >= date_from,
+        Order.business_date <= date_to,
+        Order.status == OrderStatus.SUCCESS.value,
+    ]
+    (
+        order_count,
+        order_amount,
+        coupon_amount,
+        actual_paid,
+        settlement_income,
+        cost,
+        commission,
+        profit,
+        negative_count,
+    ) = db.execute(select(*_performance_metrics()).where(*base_filters)).one()
+    return PerformanceReport(
+        summary=PerformanceSummary(
+            date_from=date_from,
+            date_to=date_to,
+            order_count=order_count,
+            order_amount=_decimal(order_amount),
+            coupon_amount=_decimal(coupon_amount),
+            actual_paid=_decimal(actual_paid),
+            settlement_income=_decimal(settlement_income),
+            cost=_decimal(cost),
+            commission=_decimal(commission),
+            profit=_decimal(profit),
+            negative_profit_count=int(negative_count),
+        ),
+        sources=_performance_group(
+            db,
+            base_filters=base_filters,
+            group_type="source",
+            entity_id_column=Order.source_id,
+            entity_name_column=Source.name,
+            join_source=True,
+        ),
+        leaders=_performance_group(
+            db,
+            base_filters=base_filters,
+            group_type="leader",
+            entity_id_column=Order.contractor_id,
+            entity_name_column=Order.contractor_name_snapshot,
+            extra_filters=[Order.contractor_type == ContractorType.LEADER.value],
+        ),
+        retails=_performance_group(
+            db,
+            base_filters=base_filters,
+            group_type="retail",
+            entity_id_column=Order.contractor_id,
+            entity_name_column=Order.contractor_name_snapshot,
+            extra_filters=[Order.contractor_type == ContractorType.RETAIL.value],
+        ),
+        performers=_performance_group(
+            db,
+            base_filters=base_filters,
+            group_type="performer",
+            entity_id_column=Order.performer_id,
+            entity_name_column=Order.performer_name_snapshot,
+            extra_filters=[Order.performer_id.is_not(None)],
+        ),
+    )
+
+
+@router.get("/performance/daily", response_model=list[PerformanceDailyRow])
+def daily_performance_report(
+    context: CurrentContext,
+    db: DbSession,
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> list[PerformanceDailyRow]:
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    filters = [
+        Order.tenant_id == context.tenant_id,
+        Order.status == OrderStatus.SUCCESS.value,
+    ]
+    if date_from:
+        filters.append(Order.business_date >= date_from)
+    if date_to:
+        filters.append(Order.business_date <= date_to)
+    rows = db.execute(
+        select(Order.business_date, *_performance_metrics())
+        .where(*filters)
+        .group_by(Order.business_date)
+        .order_by(Order.business_date.desc())
+    ).all()
+    return [
+        PerformanceDailyRow(
+            business_date=business_date,
+            order_count=order_count,
+            order_amount=_decimal(order_amount),
+            coupon_amount=_decimal(coupon_amount),
+            actual_paid=_decimal(actual_paid),
+            settlement_income=_decimal(settlement_income),
+            cost=_decimal(cost),
+            commission=_decimal(commission),
+            profit=_decimal(profit),
+            negative_profit_count=int(negative_count),
+        )
+        for (
+            business_date,
+            order_count,
+            order_amount,
+            coupon_amount,
+            actual_paid,
+            settlement_income,
+            cost,
+            commission,
+            profit,
+            negative_count,
+        ) in rows
+    ]
+
+
 @router.get("/export-fields")
 def export_fields(context: CurrentContext) -> list[dict]:
     return [{"value": key, "label": label} for key, (label, _) in FIELD_DEFINITIONS.items()]
@@ -116,26 +324,26 @@ def export_orders(
     order_status: OrderStatus | None = Query(default=None, alias="status"),
     source_id: int | None = None,
     contractor_id: int | None = None,
+    performer_id: int | None = None,
     contractor_type: ContractorType | None = None,
+    keyword: str | None = Query(default=None, max_length=100),
 ):
     invalid_fields = set(fields) - set(FIELD_DEFINITIONS)
     if invalid_fields or not fields:
         raise HTTPException(status_code=422, detail="导出字段无效")
-    filters = [Order.tenant_id == context.tenant_id]
+    filters = build_order_filters(
+        tenant_id=context.tenant_id,
+        date_from=date_from,
+        date_to=date_to,
+        order_status=order_status,
+        source_id=source_id,
+        contractor_id=contractor_id,
+        performer_id=performer_id,
+        contractor_type=contractor_type,
+        keyword=keyword,
+    )
     if order_ids:
         filters.append(Order.id.in_(order_ids))
-    if date_from:
-        filters.append(Order.business_date >= date_from)
-    if date_to:
-        filters.append(Order.business_date <= date_to)
-    if order_status:
-        filters.append(Order.status == order_status.value)
-    if source_id:
-        filters.append(Order.source_id == source_id)
-    if contractor_id:
-        filters.append(Order.contractor_id == contractor_id)
-    if contractor_type:
-        filters.append(Order.contractor_type == contractor_type.value)
 
     records = db.execute(
         select(Order, Source.name)
@@ -181,7 +389,9 @@ def export_orders(
         "status": order_status.value if order_status else None,
         "source_id": source_id,
         "contractor_id": contractor_id,
+        "performer_id": performer_id,
         "contractor_type": contractor_type.value if contractor_type else None,
+        "keyword": keyword,
     }
     digest = sha256(content).hexdigest()
     log = ExportLog(

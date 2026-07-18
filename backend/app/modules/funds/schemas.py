@@ -43,6 +43,7 @@ class LedgerOutput(BaseModel):
     contractor_id: int | None
     source_id: int | None
     order_id: int | None
+    settlement_id: int | None
     reversed_entry_id: int | None
     note: str | None
     created_by: int

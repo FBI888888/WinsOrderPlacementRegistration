@@ -25,7 +25,7 @@ const menuItems = [
   { key: '/partners', icon: <TeamOutlined />, label: '合作方' },
   { key: '/funds', icon: <TransactionOutlined />, label: '资金流水' },
   { key: '/settlements', icon: <FileDoneOutlined />, label: '结算中心' },
-  { key: '/reports', icon: <BookOutlined />, label: '报表导出' },
+  { key: '/reports', icon: <BookOutlined />, label: '报表中心' },
   { key: '/team', icon: <BankOutlined />, label: '成员权限', ownerOnly: true },
   { key: '/audit', icon: <AuditOutlined />, label: '审计日志', ownerOnly: true },
 ]

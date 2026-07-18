@@ -4,16 +4,66 @@ from sqlalchemy import select
 from app.modules.iam.dependencies import CurrentContext, DbSession, require_roles
 from app.modules.iam.models import MemberRole
 from app.modules.settlements.models import Settlement, SettlementStatus, SettlementType
-from app.modules.settlements.schemas import SettlementAction, SettlementCreate, SettlementOutput
+from app.modules.settlements.schemas import (
+    BatchClearingRequest,
+    ClearingPreviewItem,
+    ClearingRequest,
+    SettlementAction,
+    SettlementCreate,
+    SettlementOutput,
+)
 from app.modules.settlements.service import (
+    clear_all_targets,
+    clear_target,
     confirm_settlement,
     create_settlement,
     get_settlement,
+    list_clearing_preview,
     reverse_settlement,
 )
 
 router = APIRouter(prefix="/settlements", tags=["结算"])
 write_roles = (MemberRole.OWNER.value, MemberRole.BOOKKEEPER.value)
+
+
+@router.get("/clearing-preview", response_model=list[ClearingPreviewItem])
+def clearing_preview(context: CurrentContext, db: DbSession) -> list[dict]:
+    return list_clearing_preview(db, tenant_id=context.tenant_id)
+
+
+@router.post("/clear", response_model=SettlementOutput)
+def clear_one(
+    data: ClearingRequest,
+    db: DbSession,
+    context=Depends(require_roles(*write_roles)),
+) -> Settlement:
+    settlement = clear_target(
+        db,
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        settlement_type=data.settlement_type,
+        counterparty_id=data.counterparty_id,
+        business_date=data.business_date,
+        note=data.note,
+    )
+    db.commit()
+    db.refresh(settlement)
+    return settlement
+
+
+@router.post("/clear-batch", response_model=list[SettlementOutput])
+def clear_batch(
+    data: BatchClearingRequest,
+    db: DbSession,
+    context=Depends(require_roles(*write_roles)),
+) -> list[Settlement]:
+    return clear_all_targets(
+        db,
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        business_date=data.business_date,
+        note=data.note,
+    )
 
 
 @router.get("", response_model=list[SettlementOutput])

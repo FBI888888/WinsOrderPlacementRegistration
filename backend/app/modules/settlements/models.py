@@ -38,6 +38,8 @@ class Settlement(Base, IdMixin, TimestampMixin, TenantOwnedMixin):
     settlement_income_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
     profit_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
     account_balance_snapshot: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
+    account: Mapped[str | None] = mapped_column(String(30))
+    settled_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500))
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     confirmed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))

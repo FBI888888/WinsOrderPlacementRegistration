@@ -2,7 +2,7 @@ import { DownloadOutlined, MoreOutlined, PlusOutlined, SearchOutlined } from '@a
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, Drawer, Dropdown, Input, Select, Space, Table, Tag, Typography } from 'antd'
 import dayjs from 'dayjs'
-import { useEffect, useMemo, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, errorMessage } from '../../shared/api'
 import { Money, PageTitle, StatusTag } from '../../shared/components'
@@ -26,8 +26,10 @@ export function OrdersPage() {
   const [page, setPage] = useState(1)
   const [status, setStatus] = useState<string>()
   const [sourceId, setSourceId] = useState<number>()
+  const [leaderId, setLeaderId] = useState<number>()
   const [contractorType, setContractorType] = useState<string>()
   const [keyword, setKeyword] = useState('')
+  const deferredKeyword = useDeferredValue(keyword)
   const [selectedIds, setSelectedIds] = useState<React.Key[]>([])
 
   useEffect(() => {
@@ -46,7 +48,15 @@ export function OrdersPage() {
     queryKey: ['performers', 'orders'],
     queryFn: () => api.get<Performer[]>('/partners/performers').then((res) => res.data),
   })
-  const filters = useMemo(() => ({ page, page_size: 20, status, source_id: sourceId, contractor_type: contractorType }), [page, status, sourceId, contractorType])
+  const filters = useMemo(() => ({
+    page,
+    page_size: 20,
+    status,
+    source_id: sourceId,
+    contractor_id: leaderId,
+    contractor_type: contractorType,
+    keyword: deferredKeyword.trim() || undefined,
+  }), [page, status, sourceId, leaderId, contractorType, deferredKeyword])
   const orders = useQuery({
     queryKey: ['orders', filters],
     queryFn: () => api.get<{ items: Order[]; total: number }>('/orders', { params: filters }).then((res) => res.data),
@@ -56,15 +66,6 @@ export function OrdersPage() {
     queryFn: () => api.get<OrderHistoryItem[]>(`/orders/${historyOrder!.id}/history`).then((res) => res.data),
     enabled: Boolean(historyOrder?.id),
   })
-  const filteredItems = useMemo(() => {
-    const value = keyword.trim().toLowerCase()
-    if (!value) return orders.data?.items ?? []
-    return (orders.data?.items ?? []).filter((order) =>
-      [order.order_no, order.source_name, order.contractor_name, order.performer_name]
-        .filter(Boolean)
-        .some((item) => String(item).toLowerCase().includes(value)),
-    )
-  }, [orders.data?.items, keyword])
 
   const notifyCouponEligibility = (order: Order) => {
     if (order.available_coupons > 0 && order.performer_name) {
@@ -86,6 +87,7 @@ export function OrdersPage() {
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
       await queryClient.invalidateQueries({ queryKey: ['performers'] })
       await queryClient.invalidateQueries({ queryKey: ['point-accounts'] })
+      await queryClient.invalidateQueries({ queryKey: ['performer-order-stats'] })
     },
     onError: (error) => message.error(errorMessage(error, '订单保存失败')),
   })
@@ -119,6 +121,7 @@ export function OrdersPage() {
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
       await queryClient.invalidateQueries({ queryKey: ['performers'] })
       await queryClient.invalidateQueries({ queryKey: ['point-accounts'] })
+      await queryClient.invalidateQueries({ queryKey: ['performer-order-stats'] })
     },
     onError: (error) => message.error(errorMessage(error, '订单更新失败')),
   })
@@ -132,6 +135,7 @@ export function OrdersPage() {
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
       await queryClient.invalidateQueries({ queryKey: ['performers'] })
       await queryClient.invalidateQueries({ queryKey: ['point-accounts'] })
+      await queryClient.invalidateQueries({ queryKey: ['performer-order-stats'] })
     },
     onError: (error) => message.error(errorMessage(error, '状态更新失败')),
   })
@@ -179,18 +183,19 @@ export function OrdersPage() {
       />
       <Card>
         <div className="filter-bar">
-          <Input allowClear prefix={<SearchOutlined />} placeholder="当前页搜索订单号、人员" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+          <Input allowClear prefix={<SearchOutlined />} placeholder="搜索订单号或人员" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage(1) }} />
           <Select allowClear placeholder="订单状态" value={status} onChange={(value) => { setStatus(value); setPage(1) }} options={[
             { value: 'DRAFT', label: '草稿' }, { value: 'DISPATCHED', label: '已派单' }, { value: 'SUCCESS', label: '成功' }, { value: 'CANCELLED', label: '已取消' }, { value: 'REVERSED', label: '已冲正' },
           ]} />
           <Select allowClear showSearch optionFilterProp="label" placeholder="放单人员" value={sourceId} onChange={(value) => { setSourceId(value); setPage(1) }} options={sources.data?.map((item) => ({ value: item.id, label: item.name }))} />
+          <Select allowClear showSearch optionFilterProp="label" placeholder="学生头子" value={leaderId} onChange={(value) => { setLeaderId(value); setPage(1) }} options={leaders.data?.map((item) => ({ value: item.id, label: item.name }))} />
           <Select allowClear placeholder="做单方式" value={contractorType} onChange={(value) => { setContractorType(value); setPage(1) }} options={[{ value: 'LEADER', label: '学生头子' }, { value: 'RETAIL', label: '散户' }]} />
           {selectedIds.length > 0 && <Button icon={<DownloadOutlined />} onClick={() => void exportSelected()}>导出已选 {selectedIds.length} 单</Button>}
         </div>
         <Table<Order>
           rowKey="id"
           loading={orders.isLoading}
-          dataSource={filteredItems}
+          dataSource={orders.data?.items ?? []}
           scroll={{ x: 1200 }}
           rowSelection={{ selectedRowKeys: selectedIds, onChange: setSelectedIds }}
           pagination={{ current: page, pageSize: 20, total: orders.data?.total, showSizeChanger: false, onChange: setPage }}

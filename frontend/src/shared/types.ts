@@ -34,6 +34,11 @@ export interface Performer {
   created_at: string
 }
 
+export interface PerformerOrderStat {
+  performer_id: number
+  success_count: number
+}
+
 export interface PointAccount {
   performer_id: number
   performer_name: string
@@ -104,6 +109,57 @@ export interface DashboardSummary {
   negative_profit_count: number
 }
 
+export interface PerformanceSummary {
+  date_from: string
+  date_to: string
+  order_count: number
+  order_amount: string
+  coupon_amount: string
+  actual_paid: string
+  settlement_income: string
+  cost: string
+  commission: string
+  profit: string
+  negative_profit_count: number
+}
+
+export interface PerformanceDailyRow {
+  business_date: string
+  order_count: number
+  order_amount: string
+  coupon_amount: string
+  actual_paid: string
+  settlement_income: string
+  cost: string
+  commission: string
+  profit: string
+  negative_profit_count: number
+}
+
+export type PerformanceGroupType = 'source' | 'leader' | 'retail' | 'performer'
+
+export interface PerformanceGroupRow {
+  group_type: PerformanceGroupType
+  entity_id: number
+  entity_name: string
+  order_count: number
+  order_amount: string
+  coupon_amount: string
+  actual_paid: string
+  settlement_income: string
+  cost: string
+  commission: string
+  profit: string
+}
+
+export interface PerformanceReport {
+  summary: PerformanceSummary
+  sources: PerformanceGroupRow[]
+  leaders: PerformanceGroupRow[]
+  retails: PerformanceGroupRow[]
+  performers: PerformanceGroupRow[]
+}
+
 export interface LedgerEntry {
   id: number
   business_date: string
@@ -113,6 +169,7 @@ export interface LedgerEntry {
   contractor_id?: number
   source_id?: number
   order_id?: number
+  settlement_id?: number
   note?: string
   created_at: string
 }
@@ -121,6 +178,14 @@ export interface Balance {
   account: 'ADVANCE' | 'COMMISSION_PAYABLE' | 'SOURCE_RECEIVABLE'
   counterparty_id: number
   counterparty_name: string
+  balance: string
+}
+
+export interface ClearingPreviewItem {
+  settlement_type: 'SOURCE' | 'CONTRACTOR'
+  counterparty_id: number
+  counterparty_name: string
+  account: 'COMMISSION_PAYABLE' | 'SOURCE_RECEIVABLE'
   balance: string
 }
 
@@ -141,6 +206,8 @@ export interface Settlement {
   settlement_income_total: string
   profit_total: string
   account_balance_snapshot: string
+  account?: 'COMMISSION_PAYABLE' | 'SOURCE_RECEIVABLE'
+  settled_amount: string
   note?: string
   created_at: string
 }

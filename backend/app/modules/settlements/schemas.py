@@ -26,6 +26,26 @@ class SettlementCreate(BaseModel):
         return self
 
 
+class ClearingRequest(BaseModel):
+    settlement_type: SettlementType
+    counterparty_id: int
+    business_date: date = Field(default_factory=date.today)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class BatchClearingRequest(BaseModel):
+    business_date: date = Field(default_factory=date.today)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ClearingPreviewItem(BaseModel):
+    settlement_type: SettlementType
+    counterparty_id: int
+    counterparty_name: str
+    account: str
+    balance: Decimal
+
+
 class SettlementAction(BaseModel):
     reason: str | None = Field(default=None, max_length=300)
 
@@ -49,6 +69,8 @@ class SettlementOutput(BaseModel):
     settlement_income_total: Decimal
     profit_total: Decimal
     account_balance_snapshot: Decimal
+    account: str | None
+    settled_amount: Decimal
     note: str | None
     confirmed_at: datetime | None
     reversed_at: datetime | None

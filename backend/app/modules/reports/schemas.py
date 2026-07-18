@@ -18,6 +18,55 @@ class DashboardSummary(BaseModel):
     negative_profit_count: int
 
 
+class PerformanceSummary(BaseModel):
+    date_from: date
+    date_to: date
+    order_count: int
+    order_amount: Decimal
+    coupon_amount: Decimal
+    actual_paid: Decimal
+    settlement_income: Decimal
+    cost: Decimal
+    commission: Decimal
+    profit: Decimal
+    negative_profit_count: int
+
+
+class PerformanceDailyRow(BaseModel):
+    business_date: date
+    order_count: int
+    order_amount: Decimal
+    coupon_amount: Decimal
+    actual_paid: Decimal
+    settlement_income: Decimal
+    cost: Decimal
+    commission: Decimal
+    profit: Decimal
+    negative_profit_count: int
+
+
+class PerformanceGroupRow(BaseModel):
+    group_type: str
+    entity_id: int
+    entity_name: str
+    order_count: int
+    order_amount: Decimal
+    coupon_amount: Decimal
+    actual_paid: Decimal
+    settlement_income: Decimal
+    cost: Decimal
+    commission: Decimal
+    profit: Decimal
+
+
+class PerformanceReport(BaseModel):
+    summary: PerformanceSummary
+    sources: list[PerformanceGroupRow]
+    leaders: list[PerformanceGroupRow]
+    retails: list[PerformanceGroupRow]
+    performers: list[PerformanceGroupRow]
+
+
 class ExportTemplateCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     fields: list[str] = Field(min_length=1)

@@ -1,11 +1,12 @@
-import { EditOutlined, GiftOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons'
+import { EditOutlined, EyeOutlined, GiftOutlined, PlusOutlined, StopOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { App, Button, Card, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
+import { App, Button, Card, Drawer, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Typography } from 'antd'
 import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, errorMessage } from '../../shared/api'
-import type { Contractor, Performer, PointAccount } from '../../shared/types'
+import { Money } from '../../shared/components'
+import type { Contractor, Order, Performer, PerformerOrderStat, PointAccount } from '../../shared/types'
 
 interface PendingPointOrder {
   id: number
@@ -27,6 +28,7 @@ export function PerformerManagement() {
   const [retailOpen, setRetailOpen] = useState(false)
   const [studentOpen, setStudentOpen] = useState(false)
   const [selectedLeaderId, setSelectedLeaderId] = useState<number>()
+  const [detailTarget, setDetailTarget] = useState<Performer>()
   const [editTarget, setEditTarget] = useState<EditTarget>()
   const [retailForm] = Form.useForm()
   const [studentForm] = Form.useForm()
@@ -52,6 +54,17 @@ export function PerformerManagement() {
     queryKey: ['point-accounts'],
     queryFn: () => api.get<PointAccount[]>('/points/accounts').then((res) => res.data),
   })
+  const orderStats = useQuery({
+    queryKey: ['performer-order-stats'],
+    queryFn: () => api.get<PerformerOrderStat[]>('/orders/performer-stats').then((res) => res.data),
+  })
+  const detailOrders = useQuery({
+    queryKey: ['performer-orders', detailTarget?.id],
+    queryFn: () => api.get<{ items: Order[] }>('/orders', {
+      params: { performer_id: detailTarget!.id, status: 'SUCCESS', page_size: 200 },
+    }).then((res) => res.data.items),
+    enabled: Boolean(detailTarget),
+  })
   const pendingOrders = useQuery({
     queryKey: ['point-pending-orders'],
     queryFn: () => api.get<PendingPointOrder[]>('/points/pending-orders').then((res) => res.data),
@@ -67,6 +80,10 @@ export function PerformerManagement() {
   const accountByPerformer = useMemo(
     () => new Map((accounts.data ?? []).map((item) => [item.performer_id, item])),
     [accounts.data],
+  )
+  const orderCountByPerformer = useMemo(
+    () => new Map((orderStats.data ?? []).map((item) => [item.performer_id, item.success_count])),
+    [orderStats.data],
   )
   const retailPerformerByContractor = useMemo(
     () => new Map(
@@ -249,14 +266,22 @@ export function PerformerManagement() {
                     title: '当前积分', width: 180,
                     render: (_, contractor) => pointsCell(retailPerformerByContractor.get(contractor.id)?.id),
                   },
+                  {
+                    title: '做单次数', width: 100, align: 'right',
+                    render: (_, contractor) => {
+                      const performer = retailPerformerByContractor.get(contractor.id)
+                      return performer ? orderCountByPerformer.get(performer.id) ?? 0 : 0
+                    },
+                  },
                   { title: '备注', dataIndex: 'note', render: (value) => value || '—' },
                   {
-                    title: '操作', width: 290,
+                    title: '操作', width: 380,
                     render: (_, contractor) => {
                       const performer = retailPerformerByContractor.get(contractor.id)
                       const account = performer ? accountByPerformer.get(performer.id) : undefined
                       return (
                         <Space wrap>
+                          <Button icon={<EyeOutlined />} disabled={!performer} onClick={() => performer && setDetailTarget(performer)}>详情</Button>
                           <Button icon={<EditOutlined />} onClick={() => openEditRetail(contractor)}>编辑</Button>
                           <Button
                             icon={<GiftOutlined />}
@@ -312,13 +337,15 @@ export function PerformerManagement() {
                     render: (value) => value ? <Tag color="success">正常</Tag> : <Tag>停用</Tag>,
                   },
                   { title: '当前积分', width: 180, render: (_, performer) => pointsCell(performer.id) },
+                  { title: '做单次数', width: 100, align: 'right', render: (_, performer) => orderCountByPerformer.get(performer.id) ?? 0 },
                   { title: '备注', dataIndex: 'note', render: (value) => value || '—' },
                   {
-                    title: '操作', width: 290,
+                    title: '操作', width: 380,
                     render: (_, performer) => {
                       const account = accountByPerformer.get(performer.id)
                       return (
                         <Space wrap>
+                          <Button icon={<EyeOutlined />} onClick={() => setDetailTarget(performer)}>详情</Button>
                           <Button icon={<EditOutlined />} onClick={() => openEditStudent(performer)}>编辑</Button>
                           <Button
                             icon={<GiftOutlined />}
@@ -402,6 +429,33 @@ export function PerformerManagement() {
           <Form.Item name="note" label="备注"><Input.TextArea /></Form.Item>
         </Form>
       </Modal>
+      <Drawer
+        title={detailTarget ? `做单记录 · ${detailTarget.name}` : '做单记录'}
+        width={860}
+        open={Boolean(detailTarget)}
+        onClose={() => setDetailTarget(undefined)}
+        destroyOnHidden
+      >
+        <Table<Order>
+          rowKey="id"
+          loading={detailOrders.isLoading}
+          dataSource={detailOrders.data ?? []}
+          pagination={{ pageSize: 15 }}
+          scroll={{ x: 900 }}
+          locale={{ emptyText: '暂无成功做单记录' }}
+          columns={[
+            { title: '业务日期', dataIndex: 'business_date', width: 110 },
+            { title: '订单号', dataIndex: 'order_no', width: 180, render: (value) => <span className="mono">{value}</span> },
+            { title: '做单方', dataIndex: 'contractor_name', width: 130 },
+            { title: '放单人员', dataIndex: 'source_name', width: 130 },
+            { title: '标价', dataIndex: 'order_amount', align: 'right', width: 110, render: (value) => <Money value={value} /> },
+            { title: '优惠金额', dataIndex: 'coupon_amount', align: 'right', width: 110, render: (value) => <Money value={value} /> },
+            { title: '实付', dataIndex: 'actual_paid', align: 'right', width: 110, render: (value) => <Money value={value} /> },
+            { title: '佣金', dataIndex: 'commission', align: 'right', width: 100, render: (value) => <Money value={value} /> },
+            { title: '利润', dataIndex: 'profit', align: 'right', width: 110, render: (value) => <Money value={value} signed /> },
+          ]}
+        />
+      </Drawer>
     </Card>
   )
 }

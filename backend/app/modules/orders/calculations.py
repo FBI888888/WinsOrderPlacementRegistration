@@ -37,7 +37,13 @@ def calculate_order_amounts(
 
     after_coupon = money(order_amount - coupon_amount)
     basis_amount = order_amount if settlement_basis == SettlementBasis.ORDER_AMOUNT else after_coupon
-    income = money(settlement_income_override) if settlement_income_override is not None else money(basis_amount * discount)
+    excess_amount = max(order_amount - Decimal("210"), Decimal("0"))
+    default_income = basis_amount * discount + excess_amount * (Decimal("1") - discount)
+    income = (
+        money(settlement_income_override)
+        if settlement_income_override is not None
+        else money(default_income)
+    )
     final_commission = money(commission)
     cost = money(actual_paid + final_commission)
     profit = money(income - cost)

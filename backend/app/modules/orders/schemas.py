@@ -121,6 +121,11 @@ class OrderListOutput(BaseModel):
     page_size: int
 
 
+class PerformerOrderStat(BaseModel):
+    performer_id: int
+    success_count: int
+
+
 class OrderHistoryItem(BaseModel):
     id: int
     user_id: int | None

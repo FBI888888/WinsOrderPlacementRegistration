@@ -6,11 +6,13 @@ from sqlalchemy import func, select
 from app.modules.iam.dependencies import CurrentContext, DbSession, require_roles
 from app.modules.iam.models import AuditLog, MemberRole, User
 from app.modules.orders.models import Order, OrderStatus
+from app.modules.orders.query import build_order_filters
 from app.modules.orders.schemas import (
     OrderCreate,
     OrderHistoryItem,
     OrderListOutput,
     OrderOutput,
+    PerformerOrderStat,
     OrderStatusUpdate,
     OrderUpdate,
 )
@@ -92,30 +94,24 @@ def list_orders(
     performer_id: int | None = None,
     contractor_type: ContractorType | None = None,
     profit_sign: str | None = Query(default=None, pattern="^(positive|negative|zero)$"),
+    keyword: str | None = Query(default=None, max_length=100),
 ) -> OrderListOutput:
-    filters = [Order.tenant_id == context.tenant_id]
-    if date_from:
-        filters.append(Order.business_date >= date_from)
-    if date_to:
-        filters.append(Order.business_date <= date_to)
-    if order_status:
-        filters.append(Order.status == order_status.value)
-    if source_id:
-        filters.append(Order.source_id == source_id)
-    if contractor_id:
-        filters.append(Order.contractor_id == contractor_id)
-    if performer_id:
-        filters.append(Order.performer_id == performer_id)
-    if contractor_type:
-        filters.append(Order.contractor_type == contractor_type.value)
-    if profit_sign == "positive":
-        filters.append(Order.profit > 0)
-    elif profit_sign == "negative":
-        filters.append(Order.profit < 0)
-    elif profit_sign == "zero":
-        filters.append(Order.profit == 0)
+    filters = build_order_filters(
+        tenant_id=context.tenant_id,
+        date_from=date_from,
+        date_to=date_to,
+        order_status=order_status,
+        source_id=source_id,
+        contractor_id=contractor_id,
+        performer_id=performer_id,
+        contractor_type=contractor_type,
+        profit_sign=profit_sign,
+        keyword=keyword,
+    )
 
-    total = db.scalar(select(func.count(Order.id)).where(*filters)) or 0
+    total = db.scalar(
+        select(func.count(Order.id)).join(Source, Source.id == Order.source_id).where(*filters)
+    ) or 0
     rows = db.execute(
         select(Order, Source.name)
         .join(Source, Source.id == Order.source_id)
@@ -130,6 +126,26 @@ def list_orders(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/performer-stats", response_model=list[PerformerOrderStat])
+def list_performer_stats(
+    context: CurrentContext,
+    db: DbSession,
+) -> list[PerformerOrderStat]:
+    rows = db.execute(
+        select(Order.performer_id, func.count(Order.id))
+        .where(
+            Order.tenant_id == context.tenant_id,
+            Order.status == OrderStatus.SUCCESS.value,
+            Order.performer_id.is_not(None),
+        )
+        .group_by(Order.performer_id)
+    ).all()
+    return [
+        PerformerOrderStat(performer_id=performer_id, success_count=success_count)
+        for performer_id, success_count in rows
+    ]
 
 
 @router.get("/{order_id}", response_model=OrderOutput)

@@ -19,6 +19,7 @@ def append_entry(
     contractor_id: int | None = None,
     source_id: int | None = None,
     order_id: int | None = None,
+    settlement_id: int | None = None,
     reversed_entry_id: int | None = None,
     note: str | None = None,
 ) -> LedgerEntry:
@@ -32,6 +33,7 @@ def append_entry(
         contractor_id=contractor_id,
         source_id=source_id,
         order_id=order_id,
+        settlement_id=settlement_id,
         reversed_entry_id=reversed_entry_id,
         note=note,
     )
