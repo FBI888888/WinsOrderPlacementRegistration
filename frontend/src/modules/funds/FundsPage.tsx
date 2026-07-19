@@ -1,7 +1,7 @@
 import { FileSearchOutlined, PlusOutlined, WalletOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, Col, DatePicker, Drawer, Form, Input, Modal, Row, Select, Space, Statistic, Switch, Table, Tag, Typography } from 'antd'
-import dayjs from 'dayjs'
+import dayjs, { type Dayjs } from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { api, errorMessage } from '../../shared/api'
 import { Money, MoneyInput, PageTitle } from '../../shared/components'
@@ -25,11 +25,18 @@ export function FundsPage() {
   const [partyKind, setPartyKind] = useState<PartyKind>('contractor')
   const [partyId, setPartyId] = useState<number>()
   const [showAllBalances, setShowAllBalances] = useState(false)
-  const [clearingPreview, setClearingPreview] = useState<ClearingPreviewItem[]>([])
+  const [clearingDate, setClearingDate] = useState<Dayjs>(dayjs())
   const [batchClearingOpen, setBatchClearingOpen] = useState(false)
   const [logTarget, setLogTarget] = useState<Balance>()
 
   const balances = useQuery({ queryKey: ['fund-balances'], queryFn: () => api.get<Balance[]>('/funds/balances').then((res) => res.data) })
+  const clearingDateValue = clearingDate.format('YYYY-MM-DD')
+  const clearingPreviewQuery = useQuery({
+    queryKey: ['clearing-preview', clearingDateValue],
+    queryFn: () => api.get<ClearingPreviewItem[]>('/settlements/clearing-preview', {
+      params: { business_date: clearingDateValue },
+    }).then((res) => res.data),
+  })
   const contractors = useQuery({ queryKey: ['contractors', 'all'], queryFn: () => api.get<Contractor[]>('/partners/contractors').then((res) => res.data) })
   const sources = useQuery({ queryKey: ['sources'], queryFn: () => api.get<Source[]>('/partners/sources').then((res) => res.data) })
 
@@ -109,9 +116,12 @@ export function FundsPage() {
     [balances.data],
   )
 
-  const selectedClearingBalance = partyKind === 'contractor'
-    ? totals.COMMISSION_PAYABLE
-    : totals.SOURCE_RECEIVABLE
+  const selectedClearingBalance = Number(
+    clearingPreviewQuery.data?.find((item) => (
+      item.counterparty_id === partyId
+      && item.settlement_type === (partyKind === 'contractor' ? 'CONTRACTOR' : 'SOURCE')
+    ))?.balance ?? 0,
+  )
   const netSettlement = totals.ADVANCE - totals.COMMISSION_PAYABLE
   const balanceTableData = showAllBalances ? (balances.data ?? []) : personBalances
 
@@ -127,6 +137,7 @@ export function FundsPage() {
       form.resetFields()
       await queryClient.invalidateQueries({ queryKey: ['fund-entries'] })
       await queryClient.invalidateQueries({ queryKey: ['fund-balances'] })
+      await queryClient.invalidateQueries({ queryKey: ['clearing-preview'] })
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     },
     onError: (error) => message.error(errorMessage(error)),
@@ -136,13 +147,14 @@ export function FundsPage() {
     mutationFn: () => api.post('/settlements/clear', {
       settlement_type: partyKind === 'contractor' ? 'CONTRACTOR' : 'SOURCE',
       counterparty_id: partyId,
-      business_date: dayjs().format('YYYY-MM-DD'),
+      business_date: clearingDateValue,
     }),
     onSuccess: async () => {
       message.success('当前往来对象已结清')
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['fund-entries'] }),
         queryClient.invalidateQueries({ queryKey: ['fund-balances'] }),
+        queryClient.invalidateQueries({ queryKey: ['clearing-preview'] }),
         queryClient.invalidateQueries({ queryKey: ['settlements'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
       ])
@@ -150,24 +162,15 @@ export function FundsPage() {
     onError: (error) => message.error(errorMessage(error, '结清失败')),
   })
 
-  const openBatchClearing = async () => {
-    try {
-      const response = await api.get<ClearingPreviewItem[]>('/settlements/clearing-preview')
-      setClearingPreview(response.data)
-      setBatchClearingOpen(true)
-    } catch (error) {
-      message.error(errorMessage(error, '读取待结清余额失败'))
-    }
-  }
-
   const batchClearMutation = useMutation({
-    mutationFn: () => api.post('/settlements/clear-batch', { business_date: dayjs().format('YYYY-MM-DD') }),
+    mutationFn: () => api.post('/settlements/clear-batch', { business_date: clearingDateValue }),
     onSuccess: async () => {
       message.success('批量结清已完成')
       setBatchClearingOpen(false)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['fund-entries'] }),
         queryClient.invalidateQueries({ queryKey: ['fund-balances'] }),
+        queryClient.invalidateQueries({ queryKey: ['clearing-preview'] }),
         queryClient.invalidateQueries({ queryKey: ['settlements'] }),
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
       ])
@@ -184,7 +187,7 @@ export function FundsPage() {
         description="垫资余额、佣金应付和放单应收分别核算；结清通过追加反向流水完成，历史记录不会删除。"
         extra={(
           <Space>
-            <Button onClick={() => void openBatchClearing()}>当日批量结清</Button>
+            <Button onClick={() => setBatchClearingOpen(true)}>按日期批量结清</Button>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>登记资金</Button>
           </Space>
         )}
@@ -224,13 +227,20 @@ export function FundsPage() {
                 }))
             }
           />
+          <span>结清截至</span>
+          <DatePicker
+            value={clearingDate}
+            allowClear={false}
+            disabledDate={(current) => current.startOf('day').isAfter(dayjs().startOf('day'))}
+            onChange={(value) => value && setClearingDate(value)}
+          />
           {selectedName && <Tag>{selectedName}</Tag>}
           <Button
-            disabled={!partyId || selectedClearingBalance <= 0}
+            disabled={!partyId || clearingPreviewQuery.isLoading || selectedClearingBalance <= 0}
             loading={clearMutation.isPending}
             onClick={() => modal.confirm({
-              title: `结清「${selectedName ?? ''}」当前余额？`,
-              content: `本次将结清 ${partyKind === 'contractor' ? '待付佣金' : '放单应收'} ¥${selectedClearingBalance.toFixed(2)}，并生成可冲正的结算记录。`,
+              title: `结清「${selectedName ?? ''}」截至 ${clearingDateValue} 的余额？`,
+              content: `本次将结清截至 ${clearingDateValue} 的${partyKind === 'contractor' ? '待付佣金' : '放单应收'} ¥${selectedClearingBalance.toFixed(2)}，所选日期之后的流水不会受到影响。`,
               okText: '确认结清',
               onOk: () => clearMutation.mutateAsync(),
             })}
@@ -304,14 +314,48 @@ export function FundsPage() {
         ]} />
       </Card>
       <Card title={selectedName ? `最近流水 · ${selectedName}` : '最近流水'}>
-        <Table<LedgerEntry> rowKey="id" dataSource={entries.data} loading={entries.isLoading} scroll={{ x: 900 }} pagination={{ pageSize: 15 }} columns={[
-          { title: '日期', dataIndex: 'business_date', width: 110 },
-          { title: '类型', dataIndex: 'entry_type', width: 130, render: (value) => <Tag>{entryText[value] ?? value}</Tag> },
-          { title: '往来对象', render: (_, item) => item.contractor_id ? names.contractors.get(item.contractor_id) : item.source_id ? names.sources.get(item.source_id) : '—' },
-          { title: '关联订单', dataIndex: 'order_id', render: (value) => value ? `#${value}` : '—' },
-          { title: '备注', dataIndex: 'note', render: (value) => value || '—' },
-          { title: '变动金额', dataIndex: 'amount', align: 'right', width: 140, render: (value) => <Money value={value} signed /> },
-        ]} />
+        <Table<LedgerEntry>
+          rowKey="id"
+          dataSource={entries.data}
+          loading={entries.isLoading}
+          scroll={{ x: partyKind === 'source' ? 1050 : 1200 }}
+          pagination={{ pageSize: 15 }}
+          columns={[
+            { title: '日期', dataIndex: 'business_date', width: 110 },
+            { title: '类型', dataIndex: 'entry_type', width: 130, render: (value) => <Tag>{entryText[value] ?? value}</Tag> },
+            { title: '往来对象', render: (_, item) => item.contractor_id ? names.contractors.get(item.contractor_id) : item.source_id ? names.sources.get(item.source_id) : '—' },
+            { title: '关联订单', dataIndex: 'order_id', render: (value) => value ? `#${value}` : '—' },
+            ...(partyKind === 'source'
+              ? [{
+                title: '放单应收', width: 140, align: 'right' as const,
+                render: (_: unknown, item: LedgerEntry) => item.source_receivable_snapshot == null
+                  ? '—'
+                  : <Money value={item.source_receivable_snapshot} signed />,
+              }]
+              : [
+                {
+                  title: '垫资可用余额', width: 140, align: 'right' as const,
+                  render: (_: unknown, item: LedgerEntry) => item.advance_balance_snapshot == null
+                    ? '—'
+                    : <Money value={item.advance_balance_snapshot} signed />,
+                },
+                {
+                  title: '待付佣金', width: 130, align: 'right' as const,
+                  render: (_: unknown, item: LedgerEntry) => item.commission_payable_snapshot == null
+                    ? '—'
+                    : <Money value={item.commission_payable_snapshot} />,
+                },
+                {
+                  title: '扣佣待结算', width: 140, align: 'right' as const,
+                  render: (_: unknown, item: LedgerEntry) => item.net_settlement_snapshot == null
+                    ? '—'
+                    : <Money value={item.net_settlement_snapshot} signed />,
+                },
+              ]),
+            { title: '备注', dataIndex: 'note', render: (value) => value || '—' },
+            { title: '变动金额', dataIndex: 'amount', align: 'right' as const, width: 140, render: (value) => <Money value={value} signed /> },
+          ]}
+        />
       </Card>
 
       <Drawer
@@ -342,22 +386,25 @@ export function FundsPage() {
       </Drawer>
 
       <Modal
-        title="确认当日批量结清"
+        title={`确认批量结清 · 截至 ${clearingDateValue}`}
         open={batchClearingOpen}
         onCancel={() => setBatchClearingOpen(false)}
         onOk={() => batchClearMutation.mutate()}
         confirmLoading={batchClearMutation.isPending}
         okText="确认全部结清"
-        okButtonProps={{ disabled: clearingPreview.length === 0 }}
+        okButtonProps={{
+          disabled: clearingPreviewQuery.isLoading || (clearingPreviewQuery.data?.length ?? 0) === 0,
+        }}
       >
         <Typography.Paragraph type="secondary">
-          系统将按往来对象分别生成结算记录，并追加反向流水。垫资可用余额不会被清空。
+          系统将按往来对象分别结清截至 {clearingDateValue} 的余额，所选日期之后的流水不受影响；垫资可用余额不会被清空。
         </Typography.Paragraph>
         <Table<ClearingPreviewItem>
           rowKey={(item) => `${item.account}-${item.counterparty_id}`}
-          dataSource={clearingPreview}
+          dataSource={clearingPreviewQuery.data ?? []}
+          loading={clearingPreviewQuery.isLoading}
           pagination={false}
-          locale={{ emptyText: '当前没有待结清余额' }}
+          locale={{ emptyText: `截至 ${clearingDateValue} 没有待结清余额` }}
           columns={[
             { title: '对象', dataIndex: 'counterparty_name' },
             { title: '账户', dataIndex: 'account', render: (value) => value === 'COMMISSION_PAYABLE' ? '待付佣金' : '放单应收' },

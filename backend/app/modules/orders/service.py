@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.funds.models import LedgerAccount, LedgerEntryType
-from app.modules.funds.service import append_entry, reverse_order_entries
+from app.modules.funds.service import append_entry, order_balance_snapshot, reverse_order_entries
 from app.modules.iam.audit import record_audit
 from app.modules.orders.calculations import calculate_order_amounts
 from app.modules.orders.models import Order, OrderStatus
@@ -146,7 +146,19 @@ def _financial_values(
 
 
 def _book_success(db: Session, order: Order, user_id: int) -> None:
-    if Decimal(order.actual_paid) != 0:
+    actual_paid = Decimal(order.actual_paid)
+    commission = Decimal(order.commission)
+    settlement_income = Decimal(order.settlement_income)
+    snapshot = order_balance_snapshot(
+        db,
+        tenant_id=order.tenant_id,
+        contractor_id=order.contractor_id,
+        source_id=order.source_id,
+        actual_paid=actual_paid,
+        commission=commission,
+        settlement_income=settlement_income,
+    )
+    if actual_paid != 0:
         append_entry(
             db,
             tenant_id=order.tenant_id,
@@ -154,12 +166,13 @@ def _book_success(db: Session, order: Order, user_id: int) -> None:
             business_date=order.business_date,
             account=LedgerAccount.ADVANCE,
             entry_type=LedgerEntryType.ORDER_PAYMENT,
-            amount=-Decimal(order.actual_paid),
+            amount=-actual_paid,
             contractor_id=order.contractor_id,
             order_id=order.id,
+            snapshot=snapshot,
             note=f"订单 {order.order_no} 实付",
         )
-    if Decimal(order.commission) != 0:
+    if commission != 0:
         append_entry(
             db,
             tenant_id=order.tenant_id,
@@ -167,9 +180,10 @@ def _book_success(db: Session, order: Order, user_id: int) -> None:
             business_date=order.business_date,
             account=LedgerAccount.COMMISSION_PAYABLE,
             entry_type=LedgerEntryType.COMMISSION_ACCRUAL,
-            amount=Decimal(order.commission),
+            amount=commission,
             contractor_id=order.contractor_id,
             order_id=order.id,
+            snapshot=snapshot,
             note=f"订单 {order.order_no} 佣金",
         )
     append_entry(
@@ -179,9 +193,10 @@ def _book_success(db: Session, order: Order, user_id: int) -> None:
         business_date=order.business_date,
         account=LedgerAccount.SOURCE_RECEIVABLE,
         entry_type=LedgerEntryType.SOURCE_ACCRUAL,
-        amount=Decimal(order.settlement_income),
+        amount=settlement_income,
         source_id=order.source_id,
         order_id=order.id,
+        snapshot=snapshot,
         note=f"订单 {order.order_no} 放单收入",
     )
     book_order_points(db, order=order, user_id=user_id)

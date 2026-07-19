@@ -427,6 +427,149 @@ def test_daily_clearing_batch_and_reversal_restore_balances(
     assert editable.status_code == 200, editable.text
 
 
+def test_clearing_by_date_preserves_later_balances(
+    client: TestClient, auth_headers: dict[str, str]
+):
+    yesterday = date.today() - timedelta(days=1)
+    today = date.today()
+    source_response = client.post(
+        "/api/v1/partners/sources",
+        headers=auth_headers,
+        json={
+            "name": "跨日期渠道",
+            "default_basis": "ORDER_AMOUNT",
+            "default_discount": "0.9",
+            "effective_date": yesterday.isoformat(),
+        },
+    )
+    assert source_response.status_code == 201, source_response.text
+    leader_response = client.post(
+        "/api/v1/partners/contractors",
+        headers=auth_headers,
+        json={
+            "name": "跨日期组长",
+            "contractor_type": "LEADER",
+            "default_commission": "5",
+            "effective_date": yesterday.isoformat(),
+        },
+    )
+    assert leader_response.status_code == 201, leader_response.text
+    source_id = source_response.json()["id"]
+    leader_id = leader_response.json()["id"]
+
+    create_order(
+        client,
+        auth_headers,
+        source_id=source_id,
+        leader_id=leader_id,
+        business_date=yesterday.isoformat(),
+        status="SUCCESS",
+    )
+    create_order(
+        client,
+        auth_headers,
+        source_id=source_id,
+        leader_id=leader_id,
+        business_date=today.isoformat(),
+        status="SUCCESS",
+    )
+
+    yesterday_preview = client.get(
+        "/api/v1/settlements/clearing-preview",
+        headers=auth_headers,
+        params={"business_date": yesterday.isoformat()},
+    )
+    assert yesterday_preview.status_code == 200, yesterday_preview.text
+    assert {(item["account"], item["balance"]) for item in yesterday_preview.json()} == {
+        ("COMMISSION_PAYABLE", "5.00"),
+        ("SOURCE_RECEIVABLE", "90.00"),
+    }
+
+    yesterday_cleared = client.post(
+        "/api/v1/settlements/clear-batch",
+        headers=auth_headers,
+        json={"business_date": yesterday.isoformat()},
+    )
+    assert yesterday_cleared.status_code == 200, yesterday_cleared.text
+    assert len(yesterday_cleared.json()) == 2
+    assert all(item["date_to"] == yesterday.isoformat() for item in yesterday_cleared.json())
+    assert all(item["order_count"] == 1 for item in yesterday_cleared.json())
+
+    balances = client.get("/api/v1/funds/balances", headers=auth_headers).json()
+    balance_map = {
+        (item["account"], item["counterparty_id"]): item["balance"] for item in balances
+    }
+    assert balance_map[("COMMISSION_PAYABLE", leader_id)] == "5.00"
+    assert balance_map[("SOURCE_RECEIVABLE", source_id)] == "90.00"
+
+    for settlement in yesterday_cleared.json():
+        reversed_response = client.post(
+            f"/api/v1/settlements/{settlement['id']}/reverse",
+            headers=auth_headers,
+            json={"reason": "重新核对昨天数据"},
+        )
+        assert reversed_response.status_code == 200, reversed_response.text
+
+    restored_yesterday_preview = client.get(
+        "/api/v1/settlements/clearing-preview",
+        headers=auth_headers,
+        params={"business_date": yesterday.isoformat()},
+    )
+    assert restored_yesterday_preview.status_code == 200, restored_yesterday_preview.text
+    assert {
+        (item["account"], item["balance"])
+        for item in restored_yesterday_preview.json()
+    } == {
+        ("COMMISSION_PAYABLE", "5.00"),
+        ("SOURCE_RECEIVABLE", "90.00"),
+    }
+
+    recleared_yesterday = client.post(
+        "/api/v1/settlements/clear-batch",
+        headers=auth_headers,
+        json={"business_date": yesterday.isoformat()},
+    )
+    assert recleared_yesterday.status_code == 200, recleared_yesterday.text
+
+    today_preview = client.get(
+        "/api/v1/settlements/clearing-preview",
+        headers=auth_headers,
+        params={"business_date": today.isoformat()},
+    )
+    assert today_preview.status_code == 200, today_preview.text
+    assert {(item["account"], item["balance"]) for item in today_preview.json()} == {
+        ("COMMISSION_PAYABLE", "5.00"),
+        ("SOURCE_RECEIVABLE", "90.00"),
+    }
+
+    today_cleared = client.post(
+        "/api/v1/settlements/clear-batch",
+        headers=auth_headers,
+        json={"business_date": today.isoformat()},
+    )
+    assert today_cleared.status_code == 200, today_cleared.text
+
+    final_balances = client.get("/api/v1/funds/balances", headers=auth_headers).json()
+    final_map = {
+        (item["account"], item["counterparty_id"]): item["balance"]
+        for item in final_balances
+    }
+    assert final_map[("COMMISSION_PAYABLE", leader_id)] == "0.00"
+    assert final_map[("SOURCE_RECEIVABLE", source_id)] == "0.00"
+
+    backwards_clear = client.post(
+        "/api/v1/settlements/clear",
+        headers=auth_headers,
+        json={
+            "settlement_type": "CONTRACTOR",
+            "counterparty_id": leader_id,
+            "business_date": yesterday.isoformat(),
+        },
+    )
+    assert backwards_clear.status_code == 409
+    assert backwards_clear.json()["detail"] == "所选日期之后已有已确认结算，不能倒序结清"
+
+
 def test_single_clearing_only_clears_selected_account(
     client: TestClient, auth_headers: dict[str, str]
 ):

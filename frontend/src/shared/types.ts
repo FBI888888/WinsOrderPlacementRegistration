@@ -166,6 +166,10 @@ export interface LedgerEntry {
   account: 'ADVANCE' | 'COMMISSION_PAYABLE' | 'SOURCE_RECEIVABLE'
   entry_type: string
   amount: string
+  advance_balance_snapshot?: string | null
+  commission_payable_snapshot?: string | null
+  net_settlement_snapshot?: string | null
+  source_receivable_snapshot?: string | null
   contractor_id?: number
   source_id?: number
   order_id?: number

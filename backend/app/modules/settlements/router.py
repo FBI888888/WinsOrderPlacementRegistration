@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
@@ -27,8 +29,16 @@ write_roles = (MemberRole.OWNER.value, MemberRole.BOOKKEEPER.value)
 
 
 @router.get("/clearing-preview", response_model=list[ClearingPreviewItem])
-def clearing_preview(context: CurrentContext, db: DbSession) -> list[dict]:
-    return list_clearing_preview(db, tenant_id=context.tenant_id)
+def clearing_preview(
+    context: CurrentContext,
+    db: DbSession,
+    business_date: date = Query(default_factory=date.today),
+) -> list[dict]:
+    return list_clearing_preview(
+        db,
+        tenant_id=context.tenant_id,
+        business_date=business_date,
+    )
 
 
 @router.post("/clear", response_model=SettlementOutput)

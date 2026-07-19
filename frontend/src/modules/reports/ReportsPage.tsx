@@ -15,7 +15,7 @@ interface DetailTarget { row: PerformanceGroupRow; filterKey: 'source_id' | 'con
 
 type GroupRows = PerformanceGroupRow[]
 
-const groupColumns = (onDetail: (row: PerformanceGroupRow) => void) => [
+const groupColumns = (onDetail?: (row: PerformanceGroupRow) => void) => [
   { title: '名称', dataIndex: 'entity_name', width: 150, render: (value: string) => <strong>{value}</strong> },
   { title: '成功单量', dataIndex: 'order_count', width: 100, align: 'right' as const },
   { title: '营业额', dataIndex: 'order_amount', width: 120, align: 'right' as const, render: (value: string) => <Money value={value} /> },
@@ -25,10 +25,10 @@ const groupColumns = (onDetail: (row: PerformanceGroupRow) => void) => [
   { title: '成本', dataIndex: 'cost', width: 110, align: 'right' as const, render: (value: string) => <Money value={value} /> },
   { title: '佣金', dataIndex: 'commission', width: 100, align: 'right' as const, render: (value: string) => <Money value={value} /> },
   { title: '利润', dataIndex: 'profit', width: 120, align: 'right' as const, render: (value: string) => <Money value={value} signed /> },
-  {
+  ...(onDetail ? [{
     title: '操作', fixed: 'right' as const, width: 90,
     render: (_: unknown, row: PerformanceGroupRow) => <Button type="link" icon={<EyeOutlined />} onClick={() => onDetail(row)}>详情</Button>,
-  },
+  }] : []),
 ]
 
 const dailyColumns = (onDetail: (row: PerformanceDailyRow) => void) => [
@@ -48,11 +48,20 @@ const dailyColumns = (onDetail: (row: PerformanceDailyRow) => void) => [
   },
 ]
 
-function PerformanceGroupTable({ rows, onDetail }: { rows: GroupRows; onDetail: (row: PerformanceGroupRow) => void }) {
+function PerformanceGroupTable({
+  rows,
+  onDetail,
+  loading = false,
+}: {
+  rows: GroupRows
+  onDetail?: (row: PerformanceGroupRow) => void
+  loading?: boolean
+}) {
   return (
     <Table<PerformanceGroupRow>
       rowKey={(row) => `${row.group_type}-${row.entity_id}`}
       dataSource={rows}
+      loading={loading}
       pagination={{ pageSize: 10 }}
       scroll={{ x: 1200 }}
       locale={{ emptyText: '当前期间暂无成功订单' }}
@@ -61,31 +70,15 @@ function PerformanceGroupTable({ rows, onDetail }: { rows: GroupRows; onDetail: 
   )
 }
 
-function OrderDetailTable({ orders, loading }: { orders: Order[]; loading: boolean }) {
-  return (
-    <Table<Order>
-      rowKey="id"
-      dataSource={orders}
-      loading={loading}
-      pagination={{ pageSize: 15 }}
-      scroll={{ x: 1250 }}
-      locale={{ emptyText: '暂无订单明细' }}
-      columns={[
-        { title: '日期', dataIndex: 'business_date', width: 110 },
-        { title: '订单号', dataIndex: 'order_no', width: 180, render: (value) => <span className="mono">{value}</span> },
-        { title: '放单人员', dataIndex: 'source_name', width: 130 },
-        { title: '做单方', dataIndex: 'contractor_name', width: 140 },
-        { title: '实际做单人', dataIndex: 'performer_name', width: 130, render: (value) => value || '待补' },
-        { title: '标价', dataIndex: 'order_amount', align: 'right', width: 110, render: (value) => <Money value={value} /> },
-        { title: '优惠金额', dataIndex: 'coupon_amount', align: 'right', width: 110, render: (value) => <Money value={value} /> },
-        { title: '实付', dataIndex: 'actual_paid', align: 'right', width: 110, render: (value) => <Money value={value} /> },
-        { title: '结算收入', dataIndex: 'settlement_income', align: 'right', width: 120, render: (value) => <Money value={value} /> },
-        { title: '佣金', dataIndex: 'commission', align: 'right', width: 100, render: (value) => <Money value={value} /> },
-        { title: '利润', dataIndex: 'profit', align: 'right', width: 110, render: (value) => <Money value={value} signed /> },
-      ]}
-    />
-  )
-}
+const performanceGroupTabs = (
+  data: PerformanceReport | undefined,
+  options?: { onDetail?: (row: PerformanceGroupRow) => void; loading?: boolean },
+) => [
+  { key: 'sources', label: '放单人员', children: <PerformanceGroupTable rows={data?.sources ?? []} {...options} /> },
+  { key: 'leaders', label: '学生头子', children: <PerformanceGroupTable rows={data?.leaders ?? []} {...options} /> },
+  { key: 'retails', label: '散户', children: <PerformanceGroupTable rows={data?.retails ?? []} {...options} /> },
+  { key: 'performers', label: '实际做单人', children: <PerformanceGroupTable rows={data?.performers ?? []} {...options} /> },
+]
 
 export function ReportsPage() {
   const { message } = App.useApp()
@@ -126,16 +119,12 @@ export function ReportsPage() {
     queryFn: () => api.get<{ items: Order[] }>('/orders', { params: detailParams }).then((res) => res.data.items),
     enabled: Boolean(detailParams),
   })
-  const dailyDetailParams = useMemo(() => dailyDate ? {
-    date_from: dailyDate,
-    date_to: dailyDate,
-    status: 'SUCCESS',
-    page_size: 200,
-  } : undefined, [dailyDate])
-  const dailyDetailOrders = useQuery({
-    queryKey: ['daily-performance-detail-orders', dailyDetailParams],
-    queryFn: () => api.get<{ items: Order[] }>('/orders', { params: dailyDetailParams }).then((res) => res.data.items),
-    enabled: Boolean(dailyDetailParams),
+  const dailyDetailReport = useQuery({
+    queryKey: ['daily-performance-detail', dailyDate],
+    queryFn: () => api.get<PerformanceReport>('/reports/performance', {
+      params: { date_from: dailyDate, date_to: dailyDate },
+    }).then((res) => res.data),
+    enabled: Boolean(dailyDate),
   })
 
   const fieldOptions = useQuery({
@@ -206,12 +195,10 @@ export function ReportsPage() {
   }
   const data = report.data
   const summary = data?.summary
-  const groupTabs = [
-    { key: 'sources', label: '放单人员', children: <PerformanceGroupTable rows={data?.sources ?? []} onDetail={openDetail} /> },
-    { key: 'leaders', label: '学生头子', children: <PerformanceGroupTable rows={data?.leaders ?? []} onDetail={openDetail} /> },
-    { key: 'retails', label: '散户', children: <PerformanceGroupTable rows={data?.retails ?? []} onDetail={openDetail} /> },
-    { key: 'performers', label: '实际做单人', children: <PerformanceGroupTable rows={data?.performers ?? []} onDetail={openDetail} /> },
-  ]
+  const groupTabs = performanceGroupTabs(data, { onDetail: openDetail })
+  const dailyGroupTabs = performanceGroupTabs(dailyDetailReport.data, {
+    loading: dailyDetailReport.isLoading,
+  })
 
   return (
     <div className="page-stack">
@@ -288,14 +275,14 @@ export function ReportsPage() {
         />
       </Drawer>
       <Drawer
-        title={dailyDate ? `每日订单明细 · ${dailyDate}` : '每日订单明细'}
-        width={1180}
+        title={dailyDate ? `每日业绩详情 · ${dailyDate}` : '每日业绩详情'}
+        width={1280}
         open={Boolean(dailyDate)}
         onClose={() => setDailyDate(undefined)}
         destroyOnHidden
       >
-        <Typography.Paragraph type="secondary">仅显示该日成功订单。</Typography.Paragraph>
-        <OrderDetailTable orders={dailyDetailOrders.data ?? []} loading={dailyDetailOrders.isLoading} />
+        <Typography.Paragraph type="secondary">仅统计该日成功订单，按人员角色汇总业绩。</Typography.Paragraph>
+        <Tabs items={dailyGroupTabs} />
       </Drawer>
 
       <Drawer title="导出业绩报表" width={720} open={exportOpen} onClose={() => setExportOpen(false)} destroyOnHidden>

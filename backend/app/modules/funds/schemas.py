@@ -40,6 +40,10 @@ class LedgerOutput(BaseModel):
     account: str
     entry_type: str
     amount: Decimal
+    advance_balance_snapshot: Decimal | None
+    commission_payable_snapshot: Decimal | None
+    net_settlement_snapshot: Decimal | None
+    source_receivable_snapshot: Decimal | None
     contractor_id: int | None
     source_id: int | None
     order_id: int | None

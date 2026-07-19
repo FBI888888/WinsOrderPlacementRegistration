@@ -101,6 +101,7 @@ def _create_settlement_record(
         account=account,
         source_id=target_id if account == LedgerAccount.SOURCE_RECEIVABLE else None,
         contractor_id=target_id if account == LedgerAccount.COMMISSION_PAYABLE else None,
+        date_to=data.date_to if clear_current_balance else None,
     )
     if clear_current_balance:
         if account_balance <= ZERO:
@@ -283,7 +284,7 @@ def _reverse_settlement_entries(
             db,
             tenant_id=tenant_id,
             user_id=user_id,
-            business_date=date.today(),
+            business_date=settlement.date_to,
             account=LedgerAccount(entry.account),
             entry_type=LedgerEntryType.REVERSAL,
             amount=-Decimal(entry.amount),
@@ -329,14 +330,43 @@ def reverse_settlement(
     return settlement
 
 
-def list_clearing_preview(db: Session, *, tenant_id: int) -> list[dict]:
+def _has_later_confirmed_settlement(
+    db: Session,
+    *,
+    tenant_id: int,
+    settlement_type: SettlementType,
+    counterparty_id: int,
+    business_date: date,
+) -> bool:
+    query = select(Settlement.id).where(
+        Settlement.tenant_id == tenant_id,
+        Settlement.settlement_type == settlement_type.value,
+        Settlement.status == SettlementStatus.CONFIRMED.value,
+        Settlement.date_to > business_date,
+    )
+    if settlement_type == SettlementType.SOURCE:
+        query = query.where(Settlement.source_id == counterparty_id)
+    else:
+        query = query.where(Settlement.contractor_id == counterparty_id)
+    return db.scalar(query.limit(1)) is not None
+
+
+def list_clearing_preview(
+    db: Session,
+    *,
+    tenant_id: int,
+    business_date: date,
+) -> list[dict]:
     rows = db.execute(
         select(
             LedgerEntry.account,
             LedgerEntry.contractor_id,
             LedgerEntry.source_id,
         )
-        .where(LedgerEntry.tenant_id == tenant_id)
+        .where(
+            LedgerEntry.tenant_id == tenant_id,
+            LedgerEntry.business_date <= business_date,
+        )
         .group_by(LedgerEntry.account, LedgerEntry.contractor_id, LedgerEntry.source_id)
     ).all()
     result: list[dict] = []
@@ -344,17 +374,35 @@ def list_clearing_preview(db: Session, *, tenant_id: int) -> list[dict]:
         account = LedgerAccount(account_value)
         if account == LedgerAccount.COMMISSION_PAYABLE and contractor_id:
             balance = get_balance(
-                db, tenant_id=tenant_id, account=account, contractor_id=contractor_id
+                db,
+                tenant_id=tenant_id,
+                account=account,
+                contractor_id=contractor_id,
+                date_to=business_date,
             )
             name = get_contractor(db, tenant_id, contractor_id).name
             target_type = SettlementType.CONTRACTOR
             target_id = contractor_id
         elif account == LedgerAccount.SOURCE_RECEIVABLE and source_id:
-            balance = get_balance(db, tenant_id=tenant_id, account=account, source_id=source_id)
+            balance = get_balance(
+                db,
+                tenant_id=tenant_id,
+                account=account,
+                source_id=source_id,
+                date_to=business_date,
+            )
             name = get_source(db, tenant_id, source_id).name
             target_type = SettlementType.SOURCE
             target_id = source_id
         else:
+            continue
+        if _has_later_confirmed_settlement(
+            db,
+            tenant_id=tenant_id,
+            settlement_type=target_type,
+            counterparty_id=target_id,
+            business_date=business_date,
+        ):
             continue
         if balance > ZERO:
             result.append(
@@ -379,6 +427,14 @@ def clear_target(
     business_date: date,
     note: str | None,
 ) -> Settlement:
+    if _has_later_confirmed_settlement(
+        db,
+        tenant_id=tenant_id,
+        settlement_type=settlement_type,
+        counterparty_id=counterparty_id,
+        business_date=business_date,
+    ):
+        raise HTTPException(status_code=409, detail="所选日期之后已有已确认结算，不能倒序结清")
     data = SettlementCreate(
         settlement_type=settlement_type,
         date_from=date(1970, 1, 1),
@@ -408,7 +464,11 @@ def clear_all_targets(
     business_date: date,
     note: str | None,
 ) -> list[Settlement]:
-    targets = list_clearing_preview(db, tenant_id=tenant_id)
+    targets = list_clearing_preview(
+        db,
+        tenant_id=tenant_id,
+        business_date=business_date,
+    )
     settlements = [
         clear_target(
             db,
