@@ -19,6 +19,17 @@ interface PendingPointOrder {
   created_at: string
 }
 
+type PerformerStatusFilter = 'active' | 'inactive' | 'all'
+
+const performerStatusFilterOptions = [
+  { value: 'active', label: '正常' },
+  { value: 'inactive', label: '停用' },
+  { value: 'all', label: '全部' },
+]
+
+const matchesStatusFilter = (isActive: boolean, filter: PerformerStatusFilter) =>
+  filter === 'all' || isActive === (filter === 'active')
+
 type EditTarget =
   | { kind: 'retail'; contractor: Contractor }
   | { kind: 'student'; performer: Performer }
@@ -32,6 +43,8 @@ export function PerformerManagement() {
   const [selectedLeaderId, setSelectedLeaderId] = useState<number>()
   const [detailTarget, setDetailTarget] = useState<Performer>()
   const [editTarget, setEditTarget] = useState<EditTarget>()
+  const [retailStatusFilter, setRetailStatusFilter] = useState<PerformerStatusFilter>('active')
+  const [studentStatusFilter, setStudentStatusFilter] = useState<PerformerStatusFilter>('active')
   const [retailForm] = Form.useForm()
   const [studentForm] = Form.useForm()
   const [editForm] = Form.useForm()
@@ -95,13 +108,32 @@ export function PerformerManagement() {
     ),
     [performers.data],
   )
+  const retailRows = useMemo(
+    () => (retails.data ?? [])
+      .filter((item) => matchesStatusFilter(item.is_active, retailStatusFilter))
+      .sort((left, right) => {
+        const leftPerformer = retailPerformerByContractor.get(left.id)
+        const rightPerformer = retailPerformerByContractor.get(right.id)
+        const countDifference = (orderCountByPerformer.get(leftPerformer?.id ?? -1) ?? 0)
+          - (orderCountByPerformer.get(rightPerformer?.id ?? -1) ?? 0)
+        return countDifference || left.name.localeCompare(right.name, 'zh-CN')
+      }),
+    [retails.data, retailPerformerByContractor, retailStatusFilter, orderCountByPerformer],
+  )
   const students = useMemo(
-    () => (performers.data ?? []).filter(
-      (item) => item.performer_type === 'STUDENT'
-        && item.contractor_id === selectedLeaderId
-        && item.is_listed,
-    ),
-    [performers.data, selectedLeaderId],
+    () => (performers.data ?? [])
+      .filter(
+        (item) => item.performer_type === 'STUDENT'
+          && item.contractor_id === selectedLeaderId
+          && item.is_listed
+          && matchesStatusFilter(item.is_active, studentStatusFilter),
+      )
+      .sort((left, right) => {
+        const countDifference = (orderCountByPerformer.get(left.id) ?? 0)
+          - (orderCountByPerformer.get(right.id) ?? 0)
+        return countDifference || left.name.localeCompare(right.name, 'zh-CN')
+      }),
+    [performers.data, selectedLeaderId, studentStatusFilter, orderCountByPerformer],
   )
 
   const refreshPeople = async () => {
@@ -246,16 +278,24 @@ export function PerformerManagement() {
       <Tabs items={[
         {
           key: 'retail',
-          label: `散户 ${retails.data?.length ?? 0}`,
+          label: `散户 ${retailRows.length}`,
           children: (
             <>
               <div className="table-toolbar">
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => setRetailOpen(true)}>新增散户</Button>
+                <Space wrap>
+                  <Select
+                    value={retailStatusFilter}
+                    onChange={setRetailStatusFilter}
+                    options={performerStatusFilterOptions}
+                    style={{ width: 120 }}
+                  />
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => setRetailOpen(true)}>新增散户</Button>
+                </Space>
               </div>
               <Table<Contractor>
                 rowKey="id"
-                loading={retails.isLoading || performers.isLoading || accounts.isLoading}
-                dataSource={retails.data ?? []}
+                loading={retails.isLoading || performers.isLoading || accounts.isLoading || orderStats.isLoading}
+                dataSource={retailRows}
                 pagination={false}
                 columns={[
                   { title: '姓名', dataIndex: 'name', render: (value) => <strong>{value}</strong> },
@@ -305,7 +345,7 @@ export function PerformerManagement() {
         },
         {
           key: 'students',
-          label: `实际学生 ${(performers.data ?? []).filter((item) => item.performer_type === 'STUDENT' && item.is_listed).length}`,
+          label: `实际学生 ${students.length}`,
           children: (
             <>
               <div className="table-toolbar">
@@ -322,6 +362,12 @@ export function PerformerManagement() {
                       label: `${item.name}${!item.is_active ? '（停用）' : ''}`,
                     }))}
                   />
+                  <Select
+                    value={studentStatusFilter}
+                    onChange={setStudentStatusFilter}
+                    options={performerStatusFilterOptions}
+                    style={{ width: 120 }}
+                  />
                   <Button type="primary" icon={<PlusOutlined />} disabled={!selectedLeaderId} onClick={() => setStudentOpen(true)}>
                     添加实际学生
                   </Button>
@@ -329,7 +375,7 @@ export function PerformerManagement() {
               </div>
               <Table<Performer>
                 rowKey="id"
-                loading={performers.isLoading || accounts.isLoading}
+                loading={performers.isLoading || accounts.isLoading || orderStats.isLoading}
                 dataSource={students}
                 pagination={false}
                 locale={{ emptyText: selectedLeaderId ? '该学生头子名下暂无学生' : '请先选择学生头子' }}
