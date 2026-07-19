@@ -5,6 +5,7 @@ import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
 import { api, errorMessage } from '../../shared/api'
 import { Money, MoneyInput, PageTitle } from '../../shared/components'
+import { dateTime } from '../../shared/format'
 import type { Contractor, Source } from '../../shared/types'
 import { PerformerManagement } from './PerformerManagement'
 
@@ -187,6 +188,7 @@ export function PartnersPage() {
                 </div>
                 <Table<Source> rowKey="id" loading={sources.isLoading} dataSource={filteredSources} pagination={false} columns={[
                   { title: '名称', dataIndex: 'name', render: (value) => <strong>{value}</strong> },
+                  { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
                   { title: '联系方式', dataIndex: 'contact', render: (value) => value || '—' },
                   { title: '状态', dataIndex: 'is_active', width: 90, render: (value) => value ? <Tag color="success">正常</Tag> : <Tag>停用</Tag> },
                   { title: '默认结算基数', dataIndex: 'default_basis', render: (value) => value === 'ORDER_AMOUNT' ? '订单标价' : '券后价' },
@@ -231,6 +233,7 @@ export function PartnersPage() {
                 </div>
                 <Table<Contractor> rowKey="id" loading={leaders.isLoading} dataSource={filteredLeaders} pagination={false} columns={[
                   { title: '姓名', dataIndex: 'name', render: (value) => <strong>{value}</strong> },
+                  { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
                   { title: '联系方式', dataIndex: 'contact', render: (value) => value || '—' },
                   { title: '状态', dataIndex: 'is_active', width: 90, render: (value) => value ? <Tag color="success">正常</Tag> : <Tag>停用</Tag> },
                   { title: '当前每单佣金', dataIndex: 'default_commission', render: (value) => <Money value={value} /> },

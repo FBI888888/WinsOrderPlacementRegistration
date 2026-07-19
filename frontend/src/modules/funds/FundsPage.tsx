@@ -5,7 +5,7 @@ import dayjs, { type Dayjs } from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { api, errorMessage } from '../../shared/api'
 import { Money, MoneyInput, PageTitle } from '../../shared/components'
-import { statusText } from '../../shared/format'
+import { dateTime, statusText } from '../../shared/format'
 import type { Balance, ClearingPreviewItem, Contractor, LedgerEntry, Source } from '../../shared/types'
 
 const entryText: Record<string, string> = {
@@ -321,7 +321,8 @@ export function FundsPage() {
           scroll={{ x: partyKind === 'source' ? 1050 : 1200 }}
           pagination={{ pageSize: 15 }}
           columns={[
-            { title: '日期', dataIndex: 'business_date', width: 110 },
+            { title: '业务日期', dataIndex: 'business_date', width: 110 },
+            { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
             { title: '类型', dataIndex: 'entry_type', width: 130, render: (value) => <Tag>{entryText[value] ?? value}</Tag> },
             { title: '往来对象', render: (_, item) => item.contractor_id ? names.contractors.get(item.contractor_id) : item.source_id ? names.sources.get(item.source_id) : '—' },
             { title: '关联订单', dataIndex: 'order_id', render: (value) => value ? `#${value}` : '—' },
@@ -376,7 +377,8 @@ export function FundsPage() {
           scroll={{ x: 700 }}
           locale={{ emptyText: '暂无流水日志' }}
           columns={[
-            { title: '日期', dataIndex: 'business_date', width: 110 },
+            { title: '业务日期', dataIndex: 'business_date', width: 110 },
+            { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
             { title: '类型', dataIndex: 'entry_type', width: 130, render: (value) => <Tag>{entryText[value] ?? value}</Tag> },
             { title: '关联订单', dataIndex: 'order_id', width: 110, render: (value) => value ? `#${value}` : '—' },
             { title: '备注', dataIndex: 'note', render: (value) => value || '—' },

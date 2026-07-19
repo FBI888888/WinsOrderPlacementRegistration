@@ -48,3 +48,4 @@ class PendingPointOrderOutput(BaseModel):
     contractor_id: int
     contractor_name: str
     order_amount: Decimal
+    created_at: datetime

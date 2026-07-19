@@ -260,7 +260,8 @@ export function ReportsPage() {
           scroll={{ x: 1250 }}
           locale={{ emptyText: '暂无订单明细' }}
           columns={[
-            { title: '日期', dataIndex: 'business_date', width: 110 },
+            { title: '业务日期', dataIndex: 'business_date', width: 110 },
+            { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
             { title: '订单号', dataIndex: 'order_no', width: 180, render: (value) => <span className="mono">{value}</span> },
             { title: '放单人员', dataIndex: 'source_name', width: 130 },
             { title: '做单方', dataIndex: 'contractor_name', width: 140 },

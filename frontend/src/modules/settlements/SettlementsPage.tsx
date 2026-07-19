@@ -5,6 +5,7 @@ import dayjs from 'dayjs'
 import { useState } from 'react'
 import { api, errorMessage } from '../../shared/api'
 import { Money, PageTitle, StatusTag } from '../../shared/components'
+import { dateTime } from '../../shared/format'
 import type { Contractor, Settlement, Source } from '../../shared/types'
 
 const { RangePicker } = DatePicker
@@ -46,6 +47,7 @@ export function SettlementsPage() {
       <Card>
         <Table<Settlement> rowKey="id" loading={settlements.isLoading} dataSource={settlements.data} scroll={{ x: 1200 }} pagination={{ pageSize: 15 }} columns={[
           { title: '结算单号', dataIndex: 'settlement_no', width: 190, render: (value) => <span className="mono">{value}</span> },
+          { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
           { title: '类型', dataIndex: 'settlement_type', width: 110, render: (value) => <StatusTag value={value} /> },
           { title: '往来对象', dataIndex: 'counterparty_name_snapshot', width: 140 },
           { title: '期间', width: 210, render: (_, item) => `${item.date_from} 至 ${item.date_to}` },
@@ -57,7 +59,7 @@ export function SettlementsPage() {
           { title: '佣金', dataIndex: 'commission_total', width: 100, align: 'right', render: (value) => <Money value={value} /> },
           { title: '利润', dataIndex: 'profit_total', width: 120, align: 'right', render: (value) => <Money value={value} signed /> },
           { title: '状态', dataIndex: 'status', width: 100, render: (value) => <StatusTag value={value} /> },
-          { title: '确认时间', dataIndex: 'confirmed_at', width: 170, render: (value) => value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '—' },
+          { title: '确认时间', dataIndex: 'confirmed_at', width: 170, render: (value) => value ? dateTime(value) : '—' },
           {
             title: '', fixed: 'right', width: 170,
             render: (_, item) => (

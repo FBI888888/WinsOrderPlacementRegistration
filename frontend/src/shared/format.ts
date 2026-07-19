@@ -8,7 +8,7 @@ export const currency = (value: string | number | undefined) =>
   }).format(Number(value ?? 0))
 
 export const shortDate = (value: string) => dayjs(value).format('YYYY-MM-DD')
-export const dateTime = (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm')
+export const dateTime = (value: string) => dayjs(value).format('YYYY-MM-DD HH:mm:ss')
 
 export const statusText: Record<string, string> = {
   DRAFT: '草稿',

@@ -213,6 +213,9 @@ export interface Settlement {
   account?: 'COMMISSION_PAYABLE' | 'SOURCE_RECEIVABLE'
   settled_amount: string
   note?: string
+  confirmed_at?: string
+  reversed_at?: string
+  reversal_reason?: string
   created_at: string
 }
 

@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, errorMessage } from '../../shared/api'
 import { Money } from '../../shared/components'
+import { dateTime } from '../../shared/format'
 import type { Contractor, Order, Performer, PerformerOrderStat, PointAccount } from '../../shared/types'
 
 interface PendingPointOrder {
@@ -15,6 +16,7 @@ interface PendingPointOrder {
   contractor_id: number
   contractor_name: string
   order_amount: string
+  created_at: string
 }
 
 type EditTarget =
@@ -257,6 +259,7 @@ export function PerformerManagement() {
                 pagination={false}
                 columns={[
                   { title: '姓名', dataIndex: 'name', render: (value) => <strong>{value}</strong> },
+                  { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
                   { title: '联系方式', dataIndex: 'contact', render: (value) => value || '—' },
                   {
                     title: '状态', dataIndex: 'is_active', width: 90,
@@ -332,6 +335,7 @@ export function PerformerManagement() {
                 locale={{ emptyText: selectedLeaderId ? '该学生头子名下暂无学生' : '请先选择学生头子' }}
                 columns={[
                   { title: '学生姓名', dataIndex: 'name', render: (value) => <strong>{value}</strong> },
+                  { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
                   {
                     title: '状态', dataIndex: 'is_active', width: 90,
                     render: (value) => value ? <Tag color="success">正常</Tag> : <Tag>停用</Tag>,
@@ -376,6 +380,7 @@ export function PerformerManagement() {
               locale={{ emptyText: '没有缺少实际做单人的成功订单' }}
               columns={[
                 { title: '业务日期', dataIndex: 'business_date' },
+                { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
                 { title: '订单号', dataIndex: 'order_no', render: (value) => <span className="mono">{value}</span> },
                 { title: '学生头子', dataIndex: 'contractor_name' },
                 { title: '订单原价', dataIndex: 'order_amount' },
@@ -445,6 +450,7 @@ export function PerformerManagement() {
           locale={{ emptyText: '暂无成功做单记录' }}
           columns={[
             { title: '业务日期', dataIndex: 'business_date', width: 110 },
+            { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
             { title: '订单号', dataIndex: 'order_no', width: 180, render: (value) => <span className="mono">{value}</span> },
             { title: '做单方', dataIndex: 'contractor_name', width: 130 },
             { title: '放单人员', dataIndex: 'source_name', width: 130 },

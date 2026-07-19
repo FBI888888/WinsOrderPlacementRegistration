@@ -6,7 +6,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../shared/api'
 import { Money, PageTitle, StatusTag } from '../../shared/components'
-import { currency } from '../../shared/format'
+import { currency, dateTime } from '../../shared/format'
 import type { DashboardSummary, Order } from '../../shared/types'
 
 const { RangePicker } = DatePicker
@@ -64,7 +64,8 @@ export function DashboardPage() {
               pagination={false}
               locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有订单" /> }}
               columns={[
-                { title: '日期', dataIndex: 'business_date', width: 110 },
+                { title: '业务日期', dataIndex: 'business_date', width: 110 },
+                { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
                 { title: '放单人员', dataIndex: 'source_name' },
                 { title: '做单方', dataIndex: 'contractor_name' },
                 { title: '状态', dataIndex: 'status', render: (value) => <StatusTag value={value} /> },

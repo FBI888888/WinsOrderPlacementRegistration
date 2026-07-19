@@ -109,6 +109,7 @@ def list_pending_point_orders(
             contractor_id=order.contractor_id,
             contractor_name=contractor_name,
             order_amount=order.order_amount,
+            created_at=order.created_at,
         )
         for order, contractor_name in rows
     ]

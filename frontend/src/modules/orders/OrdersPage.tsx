@@ -201,6 +201,7 @@ export function OrdersPage() {
           pagination={{ current: page, pageSize: 20, total: orders.data?.total, showSizeChanger: false, onChange: setPage }}
           columns={[
             { title: '业务日期', dataIndex: 'business_date', width: 110 },
+            { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
             { title: '订单号', dataIndex: 'order_no', width: 180, render: (value) => <span className="mono">{value}</span> },
             { title: '放单人员', dataIndex: 'source_name', width: 130 },
             { title: '做单方', width: 170, render: (_, order) => <Space size={4}><StatusTag value={order.contractor_type} /><span>{order.contractor_name}</span></Space> },
