@@ -1,4 +1,4 @@
-import { FileSearchOutlined, PlusOutlined, WalletOutlined } from '@ant-design/icons'
+import { DownloadOutlined, FileSearchOutlined, PlusOutlined, WalletOutlined } from '@ant-design/icons'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { App, Button, Card, Col, DatePicker, Drawer, Form, Input, Modal, Row, Select, Space, Statistic, Switch, Table, Tag, Typography } from 'antd'
 import dayjs, { type Dayjs } from 'dayjs'
@@ -28,6 +28,11 @@ export function FundsPage() {
   const [clearingDate, setClearingDate] = useState<Dayjs>(dayjs())
   const [batchClearingOpen, setBatchClearingOpen] = useState(false)
   const [logTarget, setLogTarget] = useState<Balance>()
+  const [entryRange, setEntryRange] = useState<[Dayjs, Dayjs]>([
+    dayjs().subtract(6, 'day'),
+    dayjs(),
+  ])
+  const [exportingEntries, setExportingEntries] = useState(false)
 
   const balances = useQuery({ queryKey: ['fund-balances'], queryFn: () => api.get<Balance[]>('/funds/balances').then((res) => res.data) })
   const clearingDateValue = clearingDate.format('YYYY-MM-DD')
@@ -64,12 +69,18 @@ export function FundsPage() {
 
   const entryParams = useMemo(() => {
     if (!partyId) return undefined
-    return partyKind === 'contractor' ? { contractor_id: partyId } : { source_id: partyId }
-  }, [partyKind, partyId])
+    return {
+      ...(partyKind === 'contractor' ? { contractor_id: partyId } : { source_id: partyId }),
+      date_from: entryRange[0].format('YYYY-MM-DD'),
+      date_to: entryRange[1].format('YYYY-MM-DD'),
+    }
+  }, [partyKind, partyId, entryRange])
 
   const entries = useQuery({
     queryKey: ['fund-entries', entryParams],
-    queryFn: () => api.get<LedgerEntry[]>('/funds/entries', { params: entryParams }).then((res) => res.data),
+    queryFn: () => api.get<LedgerEntry[]>('/funds/entries', {
+      params: { ...entryParams, limit: 1000 },
+    }).then((res) => res.data),
     enabled: Boolean(entryParams),
   })
 
@@ -177,6 +188,28 @@ export function FundsPage() {
     },
     onError: (error) => message.error(errorMessage(error, '批量结清失败')),
   })
+
+  const exportEntries = async () => {
+    if (!entryParams || !selectedName) return
+    setExportingEntries(true)
+    try {
+      const response = await api.get('/funds/entries/export', {
+        params: entryParams,
+        responseType: 'blob',
+      })
+      const url = URL.createObjectURL(response.data)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `资金流水-${selectedName}-${entryParams.date_from}-${entryParams.date_to}.xlsx`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      message.success('资金流水已导出')
+    } catch (error) {
+      message.error(errorMessage(error, '资金流水导出失败'))
+    } finally {
+      setExportingEntries(false)
+    }
+  }
 
   const mutedStyle = { opacity: 0.45 }
 
@@ -313,7 +346,26 @@ export function FundsPage() {
           },
         ]} />
       </Card>
-      <Card title={selectedName ? `最近流水 · ${selectedName}` : '最近流水'}>
+      <Card
+        title={selectedName ? `最近流水 · ${selectedName}` : '最近流水'}
+        extra={(
+          <Space wrap>
+            <DatePicker.RangePicker
+              value={entryRange}
+              allowClear={false}
+              onChange={(value) => value && setEntryRange(value as [Dayjs, Dayjs])}
+            />
+            <Button
+              icon={<DownloadOutlined />}
+              loading={exportingEntries}
+              disabled={!entryParams || entries.isLoading || !(entries.data?.length)}
+              onClick={() => void exportEntries()}
+            >
+              导出 Excel
+            </Button>
+          </Space>
+        )}
+      >
         <Table<LedgerEntry>
           rowKey="id"
           dataSource={entries.data}

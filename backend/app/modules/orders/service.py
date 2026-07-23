@@ -315,6 +315,7 @@ def update_order(
         db.refresh(order)
         return order
 
+    previous_business_date = order.business_date
     business_date = changes.get("business_date", order.business_date)
     source_id = changes.get("source_id", order.source_id)
     contractor_type = ContractorType(changes.get("contractor_type", order.contractor_type))
@@ -403,14 +404,14 @@ def update_order(
             tenant_id=tenant_id,
             order_id=order.id,
             user_id=user_id,
-            business_date=business_date,
+            business_date=previous_business_date,
             note=f"订单 {order.order_no} 编辑前流水冲销",
         )
         reverse_order_points(
             db,
             order=order,
             user_id=user_id,
-            business_date=business_date,
+            business_date=previous_business_date,
             note=f"订单 {order.order_no} 编辑前积分冲销",
         )
 

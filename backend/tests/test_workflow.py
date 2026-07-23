@@ -1,6 +1,8 @@
 from datetime import date, timedelta
+from io import BytesIO
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from tests.conftest import register
 
@@ -97,6 +99,161 @@ def test_success_order_posts_ledger_and_profit(client: TestClient, auth_headers:
     )
     assert advance["balance"] == "930.00"
     assert commission["balance"] == "5.00"
+
+
+def test_ledger_entries_filter_and_export(client: TestClient, auth_headers: dict[str, str]):
+    source_id, leader_id, _ = create_business_data(client, auth_headers)
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    outside_range = today - timedelta(days=8)
+
+    for business_date, amount, note in (
+        (yesterday, "20", "范围内补款"),
+        (outside_range, "30", "范围外补款"),
+    ):
+        response = client.post(
+            "/api/v1/funds/transactions",
+            headers=auth_headers,
+            json={
+                "business_date": business_date.isoformat(),
+                "transaction_type": "ADVANCE_TOPUP",
+                "amount": amount,
+                "contractor_id": leader_id,
+                "note": note,
+            },
+        )
+        assert response.status_code == 201, response.text
+
+    filtered = client.get(
+        "/api/v1/funds/entries",
+        headers=auth_headers,
+        params={
+            "contractor_id": leader_id,
+            "date_from": yesterday.isoformat(),
+            "date_to": today.isoformat(),
+        },
+    )
+    assert filtered.status_code == 200, filtered.text
+    assert {item["business_date"] for item in filtered.json()} == {
+        yesterday.isoformat(),
+        today.isoformat(),
+    }
+    assert "范围外补款" not in {item["note"] for item in filtered.json()}
+
+    exact_day = client.get(
+        "/api/v1/funds/entries",
+        headers=auth_headers,
+        params={
+            "contractor_id": leader_id,
+            "date_from": yesterday.isoformat(),
+            "date_to": yesterday.isoformat(),
+        },
+    )
+    assert exact_day.status_code == 200, exact_day.text
+    assert [item["note"] for item in exact_day.json()] == ["范围内补款"]
+
+    invalid_range = client.get(
+        "/api/v1/funds/entries",
+        headers=auth_headers,
+        params={
+            "contractor_id": leader_id,
+            "date_from": today.isoformat(),
+            "date_to": yesterday.isoformat(),
+        },
+    )
+    assert invalid_range.status_code == 422
+
+    exported = client.get(
+        "/api/v1/funds/entries/export",
+        headers=auth_headers,
+        params={
+            "contractor_id": leader_id,
+            "date_from": today.isoformat(),
+            "date_to": today.isoformat(),
+        },
+    )
+    assert exported.status_code == 200, exported.text
+    assert exported.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    workbook = load_workbook(BytesIO(exported.content), data_only=True)
+    sheet = workbook["资金流水"]
+    rows = list(sheet.iter_rows(values_only=True))
+    assert rows[0] == (
+        "流水ID",
+        "业务日期",
+        "记录时间",
+        "流水类型",
+        "账户",
+        "往来对象",
+        "关联订单",
+        "关联结算单",
+        "变动金额",
+        "垫资可用余额",
+        "待付佣金",
+        "扣佣待结算",
+        "放单应收",
+        "备注",
+    )
+    assert len(rows) == 4
+    assert {row[1] for row in rows[1:]} == {today.isoformat()}
+    assert {row[5] for row in rows[1:]} == {"学生组长A"}
+    assert any(row[9] is not None for row in rows[1:])
+    assert any(row[10] is not None for row in rows[1:])
+
+    source_export = client.get(
+        "/api/v1/funds/entries/export",
+        headers=auth_headers,
+        params={
+            "source_id": source_id,
+            "date_from": today.isoformat(),
+            "date_to": today.isoformat(),
+        },
+    )
+    assert source_export.status_code == 200, source_export.text
+    source_sheet = load_workbook(BytesIO(source_export.content), data_only=True)["资金流水"]
+    source_rows = list(source_sheet.iter_rows(values_only=True))
+    assert len(source_rows) == 2
+    assert source_rows[1][5] == "渠道甲"
+    assert source_rows[1][12] == 90
+
+    missing_target = client.get(
+        "/api/v1/funds/entries/export",
+        headers=auth_headers,
+        params={"date_from": today.isoformat(), "date_to": today.isoformat()},
+    )
+    assert missing_target.status_code == 422
+
+    other_token = register(client, email="ledger-export-other@example.com", tenant_name="流水导出隔离")
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    isolated_list = client.get(
+        "/api/v1/funds/entries",
+        headers=other_headers,
+        params={
+            "contractor_id": leader_id,
+            "date_from": yesterday.isoformat(),
+            "date_to": today.isoformat(),
+        },
+    )
+    assert isolated_list.status_code == 200
+    assert isolated_list.json() == []
+    isolated_export = client.get(
+        "/api/v1/funds/entries/export",
+        headers=other_headers,
+        params={
+            "contractor_id": leader_id,
+            "date_from": today.isoformat(),
+            "date_to": today.isoformat(),
+        },
+    )
+    assert isolated_export.status_code == 404
+
+    audit_logs = client.get("/api/v1/auth/audit-logs", headers=auth_headers)
+    assert audit_logs.status_code == 200, audit_logs.text
+    export_logs = [item for item in audit_logs.json() if item["action"] == "fund.ledger_exported"]
+    assert len(export_logs) == 2
+    assert export_logs[0]["payload"]["date_from"] == today.isoformat()
+    assert export_logs[0]["payload"]["row_count"] == 1
 
 
 def test_all_order_statuses_can_be_edited(client: TestClient, auth_headers: dict[str, str]):
@@ -197,6 +354,133 @@ def test_edit_success_order_rebuilds_ledger(client: TestClient, auth_headers: di
     assert advance["balance"] == "940.00"
     assert commission["balance"] == "5.00"
     assert receivable["balance"] == "108.00"
+
+
+def test_edit_success_order_keeps_old_reversals_on_original_business_date(
+    client: TestClient, auth_headers: dict[str, str]
+):
+    source_id, leader_id, order_id = create_business_data(client, auth_headers)
+    original_date = date.today()
+    new_date = original_date - timedelta(days=1)
+    original_order = client.get(
+        f"/api/v1/orders/{order_id}", headers=auth_headers
+    ).json()
+
+    updated = client.patch(
+        f"/api/v1/orders/{order_id}",
+        headers=auth_headers,
+        json={"business_date": new_date.isoformat()},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["business_date"] == new_date.isoformat()
+
+    contractor_entries = client.get(
+        "/api/v1/funds/entries",
+        headers=auth_headers,
+        params={
+            "contractor_id": leader_id,
+            "date_from": new_date.isoformat(),
+            "date_to": original_date.isoformat(),
+        },
+    )
+    assert contractor_entries.status_code == 200, contractor_entries.text
+    order_entries = [
+        item for item in contractor_entries.json() if item["order_id"] == order_id
+    ]
+    assert {
+        (item["account"], item["business_date"], item["entry_type"], item["amount"])
+        for item in order_entries
+    } == {
+        ("ADVANCE", original_date.isoformat(), "ORDER_PAYMENT", "-70.00"),
+        ("ADVANCE", original_date.isoformat(), "REVERSAL", "70.00"),
+        ("ADVANCE", new_date.isoformat(), "ORDER_PAYMENT", "-70.00"),
+        (
+            "COMMISSION_PAYABLE",
+            original_date.isoformat(),
+            "COMMISSION_ACCRUAL",
+            "5.00",
+        ),
+        ("COMMISSION_PAYABLE", original_date.isoformat(), "REVERSAL", "-5.00"),
+        (
+            "COMMISSION_PAYABLE",
+            new_date.isoformat(),
+            "COMMISSION_ACCRUAL",
+            "5.00",
+        ),
+    }
+
+    source_entries = client.get(
+        "/api/v1/funds/entries",
+        headers=auth_headers,
+        params={
+            "source_id": source_id,
+            "date_from": new_date.isoformat(),
+            "date_to": original_date.isoformat(),
+        },
+    )
+    assert source_entries.status_code == 200, source_entries.text
+    source_order_entries = [
+        item for item in source_entries.json() if item["order_id"] == order_id
+    ]
+    assert {
+        (item["business_date"], item["entry_type"], item["amount"])
+        for item in source_order_entries
+    } == {
+        (original_date.isoformat(), "SOURCE_ACCRUAL", "90.00"),
+        (original_date.isoformat(), "REVERSAL", "-90.00"),
+        (new_date.isoformat(), "SOURCE_ACCRUAL", "90.00"),
+    }
+
+    point_entries = client.get(
+        "/api/v1/points/entries",
+        headers=auth_headers,
+        params={"performer_id": original_order["performer_id"]},
+    )
+    assert point_entries.status_code == 200, point_entries.text
+    order_point_entries = [
+        item for item in point_entries.json() if item["order_id"] == order_id
+    ]
+    assert {
+        (item["business_date"], item["entry_type"], item["amount"])
+        for item in order_point_entries
+    } == {
+        (original_date.isoformat(), "ORDER_EARN", "140.00"),
+        (original_date.isoformat(), "ORDER_REVERSAL", "-140.00"),
+        (new_date.isoformat(), "ORDER_EARN", "140.00"),
+    }
+
+    preview = client.get(
+        "/api/v1/settlements/clearing-preview",
+        headers=auth_headers,
+        params={"business_date": new_date.isoformat()},
+    )
+    assert preview.status_code == 200, preview.text
+    contractor_preview = next(
+        item
+        for item in preview.json()
+        if item["settlement_type"] == "CONTRACTOR"
+        and item["counterparty_id"] == leader_id
+    )
+    source_preview = next(
+        item
+        for item in preview.json()
+        if item["settlement_type"] == "SOURCE"
+        and item["counterparty_id"] == source_id
+    )
+    assert contractor_preview["balance"] == "5.00"
+    assert source_preview["balance"] == "90.00"
+
+    report = client.get(
+        "/api/v1/reports/performance",
+        headers=auth_headers,
+        params={"date_from": new_date.isoformat(), "date_to": new_date.isoformat()},
+    )
+    assert report.status_code == 200, report.text
+    leader_report = next(
+        item for item in report.json()["leaders"] if item["entity_id"] == leader_id
+    )
+    assert leader_report["order_count"] == 1
+    assert leader_report["commission"] == "5.00"
 
 
 def test_edit_order_can_clear_financial_overrides(
