@@ -12,7 +12,7 @@ from app.core.security import (
     verify_password,
 )
 from app.modules.iam.audit import record_audit
-from app.modules.iam.models import Member, MemberRole, RefreshSession, Tenant, User
+from app.modules.iam.models import BusinessMode, Member, MemberRole, RefreshSession, Tenant, User
 from app.modules.iam.schemas import AuthOutput, LoginInput, RegisterInput
 
 
@@ -35,7 +35,7 @@ def register(db: Session, data: RegisterInput) -> tuple[AuthOutput, str]:
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="邮箱已注册")
 
-    tenant = Tenant(name=data.tenant_name)
+    tenant = Tenant(name=data.tenant_name, business_mode=BusinessMode.FEDAICHU.value)
     user = User(email=email, name=data.name, password_hash=hash_password(data.password))
     db.add_all([tenant, user])
     db.flush()
@@ -78,6 +78,52 @@ def login(db: Session, data: LoginInput) -> tuple[AuthOutput, str]:
         action="auth.login",
         resource_type="user",
         resource_id=user.id,
+    )
+    db.commit()
+    return auth, refresh
+
+
+def switch_tenant(
+    db: Session,
+    *,
+    user_id: int,
+    tenant_id: int,
+    current_refresh_token: str | None,
+) -> tuple[AuthOutput, str]:
+    member = db.scalar(
+        select(Member)
+        .join(Tenant, Tenant.id == Member.tenant_id)
+        .where(
+            Member.user_id == user_id,
+            Member.tenant_id == tenant_id,
+            Member.is_active.is_(True),
+            Tenant.is_active.is_(True),
+        )
+    )
+    if not member:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="没有可用账套")
+
+    if current_refresh_token:
+        current_session = db.scalar(
+            select(RefreshSession).where(
+                RefreshSession.token_hash == hash_token(current_refresh_token),
+                RefreshSession.user_id == user_id,
+                RefreshSession.revoked_at.is_(None),
+            )
+        )
+        if current_session:
+            current_session.revoked_at = datetime.now(timezone.utc)
+
+    auth, refresh = _issue_tokens(
+        db, user_id=user_id, tenant_id=member.tenant_id, role=member.role
+    )
+    record_audit(
+        db,
+        tenant_id=member.tenant_id,
+        user_id=user_id,
+        action="auth.tenant_switched",
+        resource_type="tenant",
+        resource_id=member.tenant_id,
     )
     db.commit()
     return auth, refresh

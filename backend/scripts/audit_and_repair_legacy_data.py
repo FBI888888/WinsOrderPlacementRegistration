@@ -13,7 +13,7 @@ from app.modules.iam.audit import record_audit
 from app.modules.iam.models import Member, MemberRole, User
 from app.modules.orders.calculations import calculate_order_amounts
 from app.modules.orders.models import Order, OrderStatus
-from app.modules.partners.models import SettlementBasis
+from app.modules.partners.models import SettlementBasis, SettlementMethod
 from app.modules.settlements.models import Settlement, SettlementItem, SettlementStatus
 
 ZERO = Decimal("0")
@@ -99,7 +99,11 @@ def calculate_repair(order: Order) -> OrderRepair | None:
         coupon_amount=Decimal(order.coupon_amount),
         actual_paid=Decimal(order.actual_paid),
         settlement_basis=SettlementBasis(order.settlement_basis_snapshot),
+        settlement_method=SettlementMethod(
+            getattr(order, "settlement_method_snapshot", None) or SettlementMethod.DISCOUNT
+        ),
         discount=Decimal(order.discount_snapshot),
+        fixed_deduction=Decimal(getattr(order, "fixed_deduction_snapshot", None) or 0),
         commission=Decimal(order.commission),
         settlement_income_override=(
             Decimal(order.settlement_income) if order.income_overridden else None

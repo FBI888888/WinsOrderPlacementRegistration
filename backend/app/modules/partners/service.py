@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -12,9 +13,18 @@ from app.modules.partners.models import (
     Performer,
     PerformerType,
     SettlementBasis,
+    SettlementMethod,
     Source,
     SourceRate,
 )
+
+
+@dataclass(frozen=True)
+class ResolvedSourceRate:
+    settlement_basis: SettlementBasis
+    settlement_method: SettlementMethod
+    discount: Decimal
+    fixed_deduction: Decimal
 
 
 def normalize_name(value: str) -> str:
@@ -39,7 +49,7 @@ def get_contractor(db: Session, tenant_id: int, contractor_id: int) -> Contracto
 
 def resolve_source_rate(
     db: Session, tenant_id: int, source_id: int, business_date: date
-) -> tuple[SettlementBasis, Decimal]:
+) -> ResolvedSourceRate:
     source = get_source(db, tenant_id, source_id)
     rate = db.scalar(
         select(SourceRate)
@@ -52,8 +62,18 @@ def resolve_source_rate(
         .limit(1)
     )
     if rate:
-        return SettlementBasis(rate.settlement_basis), Decimal(rate.discount)
-    return SettlementBasis(source.default_basis), Decimal(source.default_discount)
+        return ResolvedSourceRate(
+            settlement_basis=SettlementBasis(rate.settlement_basis),
+            settlement_method=SettlementMethod(rate.settlement_method),
+            discount=Decimal(rate.discount),
+            fixed_deduction=Decimal(rate.fixed_deduction),
+        )
+    return ResolvedSourceRate(
+        settlement_basis=SettlementBasis(source.default_basis),
+        settlement_method=SettlementMethod(source.default_settlement_method),
+        discount=Decimal(source.default_discount),
+        fixed_deduction=Decimal(source.default_fixed_deduction),
+    )
 
 
 def resolve_contractor_rate(

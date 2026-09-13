@@ -29,6 +29,19 @@ describe('calculateOrderPreview', () => {
     })).toEqual({ income: 90, commission: 5, cost: 75, profit: 15 })
   })
 
+  it('按固定减额预估利润且不套用折扣', () => {
+    expect(calculateOrderPreview({
+      settlementBasis: 'ORDER_AMOUNT',
+      settlementMethod: 'FIXED_DEDUCTION',
+      discount: 0.9,
+      fixedDeduction: 10,
+      orderAmount: 300,
+      couponAmount: 0,
+      actualPaid: 200,
+      defaultCommission: 5,
+    })).toEqual({ income: 290, commission: 5, cost: 205, profit: 85 })
+  })
+
   it('支持券后口径和人工覆盖', () => {
     expect(calculateOrderPreview({
       settlementBasis: 'AFTER_COUPON',

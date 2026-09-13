@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.modules.iam.audit import record_audit
 from app.modules.iam.dependencies import CurrentContext, DbSession, require_roles
-from app.modules.iam.models import MemberRole
+from app.modules.iam.models import BusinessMode, MemberRole, Tenant
 from app.modules.partners.models import (
     Contractor,
     ContractorRate,
@@ -37,7 +37,17 @@ from app.modules.partners.service import (
     normalize_name,
 )
 
-router = APIRouter(prefix="/partners", tags=["合作方与费率"])
+def _ensure_partner_mode(context: CurrentContext, db: DbSession) -> None:
+    tenant = db.get(Tenant, context.tenant_id)
+    if tenant and tenant.business_mode == BusinessMode.JIJIHONG.value:
+        raise HTTPException(status_code=404, detail="季季红账套不使用合作方模块")
+
+
+router = APIRouter(
+    prefix="/partners",
+    tags=["合作方与费率"],
+    dependencies=[Depends(_ensure_partner_mode)],
+)
 write_roles = (MemberRole.OWNER.value, MemberRole.BOOKKEEPER.value)
 
 
@@ -60,7 +70,9 @@ def create_source(
         name=data.name.strip(),
         contact=data.contact,
         default_basis=data.default_basis.value,
+        default_settlement_method=data.default_settlement_method.value,
         default_discount=data.default_discount,
+        default_fixed_deduction=data.default_fixed_deduction,
         note=data.note,
     )
     db.add(source)
@@ -72,7 +84,9 @@ def create_source(
                 source_id=source.id,
                 effective_date=data.effective_date,
                 settlement_basis=data.default_basis.value,
+                settlement_method=data.default_settlement_method.value,
                 discount=data.default_discount,
+                fixed_deduction=data.default_fixed_deduction,
             )
         )
         record_audit(
@@ -130,11 +144,15 @@ def create_source_rate(
         source_id=source.id,
         effective_date=data.effective_date,
         settlement_basis=data.settlement_basis.value,
+        settlement_method=data.settlement_method.value,
         discount=data.discount,
+        fixed_deduction=data.fixed_deduction,
     )
     if data.effective_date <= date.today():
         source.default_basis = data.settlement_basis.value
+        source.default_settlement_method = data.settlement_method.value
         source.default_discount = data.discount
+        source.default_fixed_deduction = data.fixed_deduction
     db.add(rate)
     try:
         db.commit()

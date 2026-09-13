@@ -18,25 +18,36 @@ class OrderStatus(StrEnum):
 
 class Order(Base, IdMixin, TimestampMixin, TenantOwnedMixin):
     __tablename__ = "orders"
-    __table_args__ = (UniqueConstraint("tenant_id", "order_no", name="uq_orders_tenant_no"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "order_no", name="uq_orders_tenant_no"),
+        UniqueConstraint("tenant_id", "client_request_id", name="uq_orders_tenant_client_request"),
+    )
 
     order_no: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    client_request_id: Mapped[str | None] = mapped_column(String(64))
     business_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), nullable=False, index=True)
-    contractor_id: Mapped[int] = mapped_column(ForeignKey("contractors.id"), nullable=False, index=True)
-    contractor_type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
-    contractor_name_snapshot: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), index=True)
+    contractor_id: Mapped[int | None] = mapped_column(ForeignKey("contractors.id"), index=True)
+    contractor_type: Mapped[str | None] = mapped_column(String(20), index=True)
+    contractor_name_snapshot: Mapped[str | None] = mapped_column(String(100))
     performer_id: Mapped[int | None] = mapped_column(ForeignKey("performers.id"), index=True)
     performer_name_snapshot: Mapped[str | None] = mapped_column(String(100))
     student_name: Mapped[str | None] = mapped_column(String(100))
     point_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     order_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    customer_received_amount: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
     coupon_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False)
     actual_paid: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     settlement_basis_snapshot: Mapped[str] = mapped_column(String(30), nullable=False)
+    settlement_method_snapshot: Mapped[str] = mapped_column(
+        String(30), default="DISCOUNT", nullable=False
+    )
     discount_snapshot: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    fixed_deduction_snapshot: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0"), nullable=False
+    )
     settlement_income: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     income_overridden: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     income_override_reason: Mapped[str | None] = mapped_column(String(300))

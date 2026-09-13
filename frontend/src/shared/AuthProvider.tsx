@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, getAccessToken, setAccessToken } from './api'
 import { AuthContext } from './auth-context'
-import type { Me } from './types'
+import type { BusinessMode, Me, TenantBrief } from './types'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null)
@@ -59,8 +59,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  const switchTenant = async (tenantId: number) => {
+    const { data } = await api.post<{ access_token: string }>('/auth/switch-tenant', {
+      tenant_id: tenantId,
+    })
+    setAccessToken(data.access_token)
+    await reloadMe()
+  }
+
+  const createTenant = async (name: string, businessMode: BusinessMode) => {
+    const { data } = await api.post<TenantBrief>('/auth/tenants', {
+      name,
+      business_mode: businessMode,
+    })
+    await reloadMe()
+    return data
+  }
+
   const value = useMemo(
-    () => ({ me, loading, login, register, logout, reloadMe }),
+    () => ({ me, loading, login, register, logout, reloadMe, switchTenant, createTenant }),
     [me, loading],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

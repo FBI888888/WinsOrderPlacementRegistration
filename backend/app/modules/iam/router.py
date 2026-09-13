@@ -17,9 +17,17 @@ from app.modules.iam.schemas import (
     MemberOutput,
     MemberUpdate,
     RegisterInput,
+    SwitchTenantInput,
+    TenantCreateInput,
     TenantBrief,
 )
-from app.modules.iam.service import login, register, revoke_refresh_token, rotate_refresh_token
+from app.modules.iam.service import (
+    login,
+    register,
+    revoke_refresh_token,
+    rotate_refresh_token,
+    switch_tenant,
+)
 
 router = APIRouter(prefix="/auth", tags=["认证与成员"])
 settings = get_settings()
@@ -47,6 +55,24 @@ def register_endpoint(data: RegisterInput, response: Response, db: DbSession) ->
 @router.post("/login", response_model=AuthOutput)
 def login_endpoint(data: LoginInput, response: Response, db: DbSession) -> AuthOutput:
     auth, refresh = login(db, data)
+    _set_refresh_cookie(response, refresh)
+    return auth
+
+
+@router.post("/switch-tenant", response_model=AuthOutput)
+def switch_tenant_endpoint(
+    data: SwitchTenantInput,
+    response: Response,
+    context: CurrentContext,
+    db: DbSession,
+    refresh_token: Annotated[str | None, Cookie()] = None,
+) -> AuthOutput:
+    auth, refresh = switch_tenant(
+        db,
+        user_id=context.user_id,
+        tenant_id=data.tenant_id,
+        current_refresh_token=refresh_token,
+    )
     _set_refresh_cookie(response, refresh)
     return auth
 
@@ -88,8 +114,45 @@ def me(context: CurrentContext, db: DbSession) -> MeOutput:
         email=context.email,
         tenant_id=context.tenant_id,
         tenant_name=tenant.name if tenant else "",
+        business_mode=tenant.business_mode if tenant else "FEDAICHU",
         role=context.role,
-        tenants=[TenantBrief(id=t.id, name=t.name, role=m.role) for m, t in memberships],
+        tenants=[
+            TenantBrief(id=t.id, name=t.name, role=m.role, business_mode=t.business_mode)
+            for m, t in memberships
+        ],
+    )
+
+
+@router.post("/tenants", response_model=TenantBrief, status_code=status.HTTP_201_CREATED)
+def create_tenant(
+    data: TenantCreateInput,
+    db: DbSession,
+    context=Depends(require_roles(MemberRole.OWNER.value)),
+) -> TenantBrief:
+    tenant = Tenant(name=data.name, business_mode=data.business_mode.value)
+    db.add(tenant)
+    db.flush()
+    member = Member(
+        tenant_id=tenant.id,
+        user_id=context.user_id,
+        role=MemberRole.OWNER.value,
+    )
+    db.add(member)
+    record_audit(
+        db,
+        tenant_id=tenant.id,
+        user_id=context.user_id,
+        action="tenant.created",
+        resource_type="tenant",
+        resource_id=tenant.id,
+        payload={"business_mode": tenant.business_mode},
+    )
+    db.commit()
+    return TenantBrief(
+        id=tenant.id,
+        name=tenant.name,
+        role=member.role,
+        business_mode=tenant.business_mode,
     )
 
 

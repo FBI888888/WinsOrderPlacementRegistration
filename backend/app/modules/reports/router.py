@@ -10,9 +10,19 @@ from openpyxl import Workbook
 from sqlalchemy import case, func, select
 
 from app.modules.funds.models import LedgerAccount, LedgerEntry
+from app.modules.alipay_pool.models import (
+    AccountStatus,
+    AlipayAccount,
+    AlipayDevice,
+    FinancialEntryType,
+    JijihongFinancialEntry,
+    OrderPaymentAllocation,
+    OrderPaymentPlan,
+    PaymentPlanStatus,
+)
 from app.modules.iam.audit import record_audit
 from app.modules.iam.dependencies import CurrentContext, DbSession, require_roles
-from app.modules.iam.models import MemberRole
+from app.modules.iam.models import BusinessMode, MemberRole, Tenant, User
 from app.modules.orders.models import Order, OrderStatus
 from app.modules.orders.query import build_order_filters
 from app.modules.partners.models import ContractorType, Source
@@ -26,6 +36,9 @@ from app.modules.reports.schemas import (
     PerformanceGroupRow,
     PerformanceReport,
     PerformanceSummary,
+    JijihongBreakdownRow,
+    JijihongDailyRow,
+    JijihongReportSummary,
 )
 
 router = APIRouter(prefix="/reports", tags=["报表与导出"])
@@ -48,6 +61,20 @@ FIELD_DEFINITIONS = {
     "note": ("备注", lambda order, source: order.note or ""),
 }
 DEFAULT_FIELDS = list(FIELD_DEFINITIONS)
+JIJIHONG_EXPORT_FIELDS = [
+    "business_date",
+    "order_no",
+    "status",
+    "order_amount",
+    "customer_received",
+    "coupon_used",
+    "balance_used",
+    "external_cash",
+    "cost",
+    "profit",
+    "soft_cap_exceeded",
+    "note",
+]
 
 
 def _ledger_total(db, tenant_id: int, account: LedgerAccount) -> Decimal:
@@ -69,6 +96,7 @@ def dashboard(
 ) -> DashboardSummary:
     if date_from > date_to:
         raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    tenant = db.get(Tenant, context.tenant_id)
     base = [
         Order.tenant_id == context.tenant_id,
         Order.business_date >= date_from,
@@ -85,7 +113,61 @@ def dashboard(
             func.coalesce(func.sum(case((Order.profit < 0, 1), else_=0)), 0),
         ).where(*success_filters)
     ).one()
+    if tenant and tenant.business_mode == BusinessMode.JIJIHONG.value:
+        coupon_used, balance_used, external_cash = db.execute(
+            select(
+                func.coalesce(func.sum(OrderPaymentPlan.total_coupon), 0),
+                func.coalesce(func.sum(OrderPaymentPlan.total_balance), 0),
+                func.coalesce(func.sum(OrderPaymentPlan.total_external_cash), 0),
+            )
+            .join(Order, Order.id == OrderPaymentPlan.order_id)
+            .where(
+                OrderPaymentPlan.tenant_id == context.tenant_id,
+                OrderPaymentPlan.status == PaymentPlanStatus.CONFIRMED.value,
+                Order.business_date >= date_from,
+                Order.business_date <= date_to,
+            )
+        ).one()
+        pool_balance = db.scalar(
+            select(func.coalesce(func.sum(AlipayAccount.current_balance), 0)).where(
+                AlipayAccount.tenant_id == context.tenant_id
+            )
+        ) or 0
+        gain_loss = db.scalar(
+            select(func.coalesce(func.sum(JijihongFinancialEntry.amount), 0)).where(
+                JijihongFinancialEntry.tenant_id == context.tenant_id,
+                JijihongFinancialEntry.business_date >= date_from,
+                JijihongFinancialEntry.business_date <= date_to,
+                JijihongFinancialEntry.reconciliation_id.is_not(None),
+                JijihongFinancialEntry.entry_type.in_([
+                    FinancialEntryType.RECONCILIATION_GAIN_LOSS.value,
+                    FinancialEntryType.REVERSAL.value,
+                ]),
+            )
+        ) or 0
+        return DashboardSummary(
+            business_mode=BusinessMode.JIJIHONG.value,
+            date_from=date_from,
+            date_to=date_to,
+            order_count=order_count,
+            success_count=success_count,
+            settlement_income=income,
+            cost=cost,
+            profit=profit,
+            advance_balance=pool_balance,
+            commission_payable=0,
+            source_receivable=0,
+            negative_profit_count=negative_count,
+            customer_received=income,
+            coupon_used=coupon_used,
+            balance_used=balance_used,
+            external_cash=external_cash,
+            pool_balance=pool_balance,
+            reconciliation_gain_loss=gain_loss,
+            period_net_income=Decimal(profit) + Decimal(gain_loss),
+        )
     return DashboardSummary(
+        business_mode=BusinessMode.FEDAICHU.value,
         date_from=date_from,
         date_to=date_to,
         order_count=order_count,
@@ -106,6 +188,221 @@ def dashboard(
 
 def _decimal(value) -> Decimal:
     return Decimal(value or 0)
+
+
+def _ensure_jijihong_report(db: DbSession, tenant_id: int) -> None:
+    tenant = db.get(Tenant, tenant_id)
+    if not tenant or tenant.business_mode != BusinessMode.JIJIHONG.value:
+        raise HTTPException(status_code=404, detail="当前业务模式不提供季季红报表")
+
+
+def _jijihong_success_filters(tenant_id: int, date_from: date, date_to: date) -> list:
+    if date_from > date_to:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    return [
+        Order.tenant_id == tenant_id,
+        Order.business_date >= date_from,
+        Order.business_date <= date_to,
+        Order.status == OrderStatus.SUCCESS.value,
+        OrderPaymentPlan.status == PaymentPlanStatus.CONFIRMED.value,
+    ]
+
+
+def _jijihong_metrics():
+    return (
+        func.count(Order.id),
+        func.coalesce(func.sum(Order.order_amount), 0),
+        func.coalesce(func.sum(Order.customer_received_amount), 0),
+        func.coalesce(func.sum(OrderPaymentPlan.total_coupon), 0),
+        func.coalesce(func.sum(OrderPaymentPlan.total_balance), 0),
+        func.coalesce(func.sum(OrderPaymentPlan.total_external_cash), 0),
+        func.coalesce(func.sum(Order.cost), 0),
+        func.coalesce(func.sum(Order.profit), 0),
+        func.coalesce(
+            func.sum(case((OrderPaymentPlan.soft_cap_exceeded.is_(True), 1), else_=0)),
+            0,
+        ),
+    )
+
+
+@router.get("/jijihong/summary", response_model=JijihongReportSummary)
+def jijihong_summary(
+    context: CurrentContext,
+    db: DbSession,
+    date_from: date = Query(default_factory=date.today),
+    date_to: date = Query(default_factory=date.today),
+) -> JijihongReportSummary:
+    _ensure_jijihong_report(db, context.tenant_id)
+    filters = _jijihong_success_filters(context.tenant_id, date_from, date_to)
+    values = db.execute(
+        select(*_jijihong_metrics())
+        .join(OrderPaymentPlan, OrderPaymentPlan.order_id == Order.id)
+        .where(*filters)
+    ).one()
+    gain_loss = db.scalar(
+        select(func.coalesce(func.sum(JijihongFinancialEntry.amount), 0)).where(
+            JijihongFinancialEntry.tenant_id == context.tenant_id,
+            JijihongFinancialEntry.business_date >= date_from,
+            JijihongFinancialEntry.business_date <= date_to,
+            JijihongFinancialEntry.reconciliation_id.is_not(None),
+            JijihongFinancialEntry.entry_type.in_(
+                [
+                    FinancialEntryType.RECONCILIATION_GAIN_LOSS.value,
+                    FinancialEntryType.REVERSAL.value,
+                ]
+            ),
+        )
+    ) or 0
+    exhausted_count = db.scalar(
+        select(func.count(AlipayAccount.id)).where(
+            AlipayAccount.tenant_id == context.tenant_id,
+            AlipayAccount.status == AccountStatus.EXHAUSTED.value,
+        )
+    ) or 0
+    pool_balance = db.scalar(
+        select(func.coalesce(func.sum(AlipayAccount.current_balance), 0)).where(
+            AlipayAccount.tenant_id == context.tenant_id
+        )
+    ) or 0
+    (
+        order_count,
+        order_amount,
+        customer_received,
+        coupon_used,
+        balance_used,
+        external_cash,
+        cost,
+        profit,
+        soft_cap_count,
+    ) = values
+    return JijihongReportSummary(
+        date_from=date_from,
+        date_to=date_to,
+        order_count=int(order_count),
+        order_amount=_decimal(order_amount),
+        customer_received=_decimal(customer_received),
+        coupon_used=_decimal(coupon_used),
+        balance_used=_decimal(balance_used),
+        external_cash=_decimal(external_cash),
+        cost=_decimal(cost),
+        profit=_decimal(profit),
+        reconciliation_gain_loss=_decimal(gain_loss),
+        period_net_income=_decimal(profit) + _decimal(gain_loss),
+        soft_cap_exceeded_count=int(soft_cap_count),
+        exhausted_account_count=int(exhausted_count),
+        pool_balance=_decimal(pool_balance),
+    )
+
+
+@router.get("/jijihong/daily", response_model=list[JijihongDailyRow])
+def jijihong_daily(
+    context: CurrentContext,
+    db: DbSession,
+    date_from: date = Query(default_factory=date.today),
+    date_to: date = Query(default_factory=date.today),
+) -> list[JijihongDailyRow]:
+    _ensure_jijihong_report(db, context.tenant_id)
+    filters = _jijihong_success_filters(context.tenant_id, date_from, date_to)
+    rows = db.execute(
+        select(Order.business_date, *_jijihong_metrics())
+        .join(OrderPaymentPlan, OrderPaymentPlan.order_id == Order.id)
+        .where(*filters)
+        .group_by(Order.business_date)
+        .order_by(Order.business_date)
+    ).all()
+    return [
+        JijihongDailyRow(
+            business_date=row[0],
+            order_count=int(row[1]),
+            order_amount=_decimal(row[2]),
+            customer_received=_decimal(row[3]),
+            coupon_used=_decimal(row[4]),
+            balance_used=_decimal(row[5]),
+            external_cash=_decimal(row[6]),
+            cost=_decimal(row[7]),
+            profit=_decimal(row[8]),
+        )
+        for row in rows
+    ]
+
+
+@router.get("/jijihong/breakdown", response_model=list[JijihongBreakdownRow])
+def jijihong_breakdown(
+    context: CurrentContext,
+    db: DbSession,
+    group_by: str = Query(pattern="^(device|account|operator)$"),
+    date_from: date = Query(default_factory=date.today),
+    date_to: date = Query(default_factory=date.today),
+) -> list[JijihongBreakdownRow]:
+    _ensure_jijihong_report(db, context.tenant_id)
+    filters = _jijihong_success_filters(context.tenant_id, date_from, date_to)
+    buckets: dict[int, dict] = {}
+    if group_by == "operator":
+        rows = db.execute(
+            select(Order, OrderPaymentPlan, User)
+            .join(OrderPaymentPlan, OrderPaymentPlan.order_id == Order.id)
+            .join(User, User.id == Order.created_by)
+            .where(*filters)
+        ).all()
+        for order, plan, user in rows:
+            bucket = buckets.setdefault(
+                user.id,
+                {"name": user.name, "orders": set(), "order": Decimal(0), "received": Decimal(0),
+                 "coupon": Decimal(0), "balance": Decimal(0), "cash": Decimal(0), "cost": Decimal(0),
+                 "profit": Decimal(0)},
+            )
+            bucket["orders"].add(order.id)
+            bucket["order"] += _decimal(order.order_amount)
+            bucket["received"] += _decimal(order.customer_received_amount)
+            bucket["coupon"] += _decimal(plan.total_coupon)
+            bucket["balance"] += _decimal(plan.total_balance)
+            bucket["cash"] += _decimal(plan.total_external_cash)
+            bucket["cost"] += _decimal(order.cost)
+            bucket["profit"] += _decimal(order.profit)
+    else:
+        rows = db.execute(
+            select(Order, OrderPaymentAllocation, AlipayAccount, AlipayDevice)
+            .join(OrderPaymentPlan, OrderPaymentPlan.order_id == Order.id)
+            .join(OrderPaymentAllocation, OrderPaymentAllocation.plan_id == OrderPaymentPlan.id)
+            .join(AlipayAccount, AlipayAccount.id == OrderPaymentAllocation.account_id)
+            .join(AlipayDevice, AlipayDevice.id == AlipayAccount.device_id)
+            .where(*filters)
+        ).all()
+        for order, allocation, account, device in rows:
+            entity_id = device.id if group_by == "device" else account.id
+            entity_name = device.name if group_by == "device" else account.alias
+            bucket = buckets.setdefault(
+                entity_id,
+                {"name": entity_name, "orders": set(), "order": Decimal(0), "received": Decimal(0),
+                 "coupon": Decimal(0), "balance": Decimal(0), "cash": Decimal(0), "cost": Decimal(0),
+                 "profit": Decimal(0)},
+            )
+            gross = _decimal(allocation.coupon_amount) + _decimal(allocation.balance_amount) + _decimal(allocation.external_cash_amount)
+            ratio = gross / _decimal(order.order_amount) if _decimal(order.order_amount) else Decimal(0)
+            bucket["orders"].add(order.id)
+            bucket["order"] += gross
+            bucket["received"] += _decimal(order.customer_received_amount) * ratio
+            bucket["coupon"] += _decimal(allocation.coupon_amount)
+            bucket["balance"] += _decimal(allocation.balance_amount)
+            bucket["cash"] += _decimal(allocation.external_cash_amount)
+            bucket["cost"] += (_decimal(allocation.balance_amount) + _decimal(allocation.external_cash_amount))
+            bucket["profit"] += _decimal(order.profit) * ratio
+    return [
+        JijihongBreakdownRow(
+            group_type=group_by,
+            entity_id=entity_id,
+            entity_name=bucket["name"],
+            order_count=len(bucket["orders"]),
+            order_amount=bucket["order"],
+            customer_received=bucket["received"],
+            coupon_used=bucket["coupon"],
+            balance_used=bucket["balance"],
+            external_cash=bucket["cash"],
+            cost=bucket["cost"],
+            profit=bucket["profit"],
+        )
+        for entity_id, bucket in sorted(buckets.items(), key=lambda item: item[1]["profit"], reverse=True)
+    ]
 
 
 def _performance_metrics():
@@ -414,6 +711,110 @@ def export_orders(
     )
     db.commit()
     filename = f"orders-{date.today():%Y%m%d}.{export_format}"
+    return StreamingResponse(
+        iter([content]),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/jijihong/orders/export")
+def export_jijihong_orders(
+    context: CurrentContext,
+    db: DbSession,
+    export_format: str = Query(default="xlsx", pattern="^(xlsx|csv)$"),
+    date_from: date | None = None,
+    date_to: date | None = None,
+):
+    _ensure_jijihong_report(db, context.tenant_id)
+    filters = [Order.tenant_id == context.tenant_id]
+    if date_from:
+        filters.append(Order.business_date >= date_from)
+    if date_to:
+        filters.append(Order.business_date <= date_to)
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="开始日期不能晚于结束日期")
+    records = db.execute(
+        select(Order, OrderPaymentPlan)
+        .outerjoin(
+            OrderPaymentPlan,
+            (OrderPaymentPlan.order_id == Order.id)
+            & (OrderPaymentPlan.status == PaymentPlanStatus.CONFIRMED.value),
+        )
+        .where(*filters)
+        .order_by(Order.business_date, Order.id)
+        .limit(100_000)
+    ).all()
+    headers = [
+        "业务日期", "订单号", "状态", "订单金额", "客户实收", "优惠券",
+        "支付宝余额消耗", "真实付款", "订单成本", "订单利润", "真实付款超限", "备注",
+    ]
+    rows = [
+        [
+            order.business_date.isoformat(),
+            order.order_no,
+            order.status,
+            float(order.order_amount),
+            float(order.customer_received_amount or 0),
+            float(plan.total_coupon if plan else order.coupon_amount),
+            float(plan.total_balance if plan else 0),
+            float(plan.total_external_cash if plan else 0),
+            float(order.cost),
+            float(order.profit),
+            "是" if plan and plan.soft_cap_exceeded else "否",
+            order.note or "",
+        ]
+        for order, plan in records
+    ]
+    if export_format == "csv":
+        text = StringIO(newline="")
+        writer = csv.writer(text)
+        writer.writerow(headers)
+        writer.writerows(rows)
+        content = text.getvalue().encode("utf-8-sig")
+        media_type = "text/csv; charset=utf-8"
+    else:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "季季红订单"
+        sheet.append(headers)
+        for row in rows:
+            sheet.append(row)
+        sheet.freeze_panes = "A2"
+        for column in sheet.columns:
+            letter = column[0].column_letter
+            sheet.column_dimensions[letter].width = min(
+                max(len(str(cell.value or "")) for cell in column) + 2, 24
+            )
+        buffer = BytesIO()
+        workbook.save(buffer)
+        content = buffer.getvalue()
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    db.add(
+        ExportLog(
+            tenant_id=context.tenant_id,
+            export_format=export_format,
+            filters={
+                "business_mode": BusinessMode.JIJIHONG.value,
+                "date_from": date_from.isoformat() if date_from else None,
+                "date_to": date_to.isoformat() if date_to else None,
+            },
+            fields=JIJIHONG_EXPORT_FIELDS,
+            row_count=len(rows),
+            file_hash=sha256(content).hexdigest(),
+            created_by=context.user_id,
+        )
+    )
+    record_audit(
+        db,
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
+        action="report.jijihong_exported",
+        resource_type="export_log",
+        payload={"format": export_format, "row_count": len(rows)},
+    )
+    db.commit()
+    filename = f"jijihong-orders-{date.today():%Y%m%d}.{export_format}"
     return StreamingResponse(
         iter([content]),
         media_type=media_type,

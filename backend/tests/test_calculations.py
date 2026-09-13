@@ -3,7 +3,7 @@ from decimal import Decimal
 import pytest
 
 from app.modules.orders.calculations import calculate_order_amounts
-from app.modules.partners.models import SettlementBasis
+from app.modules.partners.models import SettlementBasis, SettlementMethod
 
 
 def test_calculate_order_amounts_from_order_amount():
@@ -79,6 +79,62 @@ def test_tiered_rule_uses_order_amount_for_excess_with_after_coupon_basis():
     )
 
     assert result.settlement_income == Decimal("261.00")
+
+
+def test_calculate_order_amounts_fixed_deduction_from_order_amount():
+    three_hundred = calculate_order_amounts(
+        order_amount=Decimal("300"),
+        coupon_amount=Decimal("0"),
+        actual_paid=Decimal("0"),
+        settlement_basis=SettlementBasis.ORDER_AMOUNT,
+        settlement_method=SettlementMethod.FIXED_DEDUCTION,
+        discount=Decimal("1"),
+        fixed_deduction=Decimal("10"),
+        commission=Decimal("0"),
+    )
+    five_hundred = calculate_order_amounts(
+        order_amount=Decimal("500"),
+        coupon_amount=Decimal("0"),
+        actual_paid=Decimal("0"),
+        settlement_basis=SettlementBasis.ORDER_AMOUNT,
+        settlement_method=SettlementMethod.FIXED_DEDUCTION,
+        discount=Decimal("1"),
+        fixed_deduction=Decimal("10"),
+        commission=Decimal("0"),
+    )
+
+    assert three_hundred.settlement_income == Decimal("290.00")
+    assert five_hundred.settlement_income == Decimal("490.00")
+
+
+def test_calculate_order_amounts_fixed_deduction_after_coupon():
+    result = calculate_order_amounts(
+        order_amount=Decimal("300"),
+        coupon_amount=Decimal("20"),
+        actual_paid=Decimal("0"),
+        settlement_basis=SettlementBasis.AFTER_COUPON,
+        settlement_method=SettlementMethod.FIXED_DEDUCTION,
+        discount=Decimal("1"),
+        fixed_deduction=Decimal("10"),
+        commission=Decimal("0"),
+    )
+
+    assert result.settlement_income == Decimal("270.00")
+
+
+def test_calculate_order_amounts_fixed_deduction_floors_at_zero():
+    result = calculate_order_amounts(
+        order_amount=Decimal("5"),
+        coupon_amount=Decimal("0"),
+        actual_paid=Decimal("0"),
+        settlement_basis=SettlementBasis.ORDER_AMOUNT,
+        settlement_method=SettlementMethod.FIXED_DEDUCTION,
+        discount=Decimal("1"),
+        fixed_deduction=Decimal("10"),
+        commission=Decimal("0"),
+    )
+
+    assert result.settlement_income == Decimal("0.00")
 
 
 def test_coupon_cannot_exceed_order_amount():

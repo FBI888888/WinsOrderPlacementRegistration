@@ -26,7 +26,7 @@ write_roles = (MemberRole.OWNER.value, MemberRole.BOOKKEEPER.value)
 
 def _output(
     order: Order,
-    source_name: str,
+    source_name: str | None,
     *,
     point_balance=None,
 ) -> OrderOutput:
@@ -46,10 +46,13 @@ def _output(
         point_balance=point_balance,
         available_coupons=available_coupons(point_balance) if point_balance is not None else 0,
         order_amount=order.order_amount,
+        customer_received_amount=order.customer_received_amount,
         coupon_amount=order.coupon_amount,
         actual_paid=order.actual_paid,
         settlement_basis_snapshot=order.settlement_basis_snapshot,
+        settlement_method_snapshot=order.settlement_method_snapshot,
         discount_snapshot=order.discount_snapshot,
+        fixed_deduction_snapshot=order.fixed_deduction_snapshot,
         settlement_income=order.settlement_income,
         income_overridden=order.income_overridden,
         income_override_reason=order.income_override_reason,
@@ -65,9 +68,11 @@ def _output(
 
 
 def _one_output(db: DbSession, tenant_id: int, order: Order) -> OrderOutput:
-    source_name = db.scalar(
-        select(Source.name).where(Source.id == order.source_id, Source.tenant_id == tenant_id)
-    ) or "已删除放单人"
+    source_name = None
+    if order.source_id is not None:
+        source_name = db.scalar(
+            select(Source.name).where(Source.id == order.source_id, Source.tenant_id == tenant_id)
+        ) or "已删除放单人"
     balance = (
         get_point_balance(
             db,
@@ -110,11 +115,14 @@ def list_orders(
     )
 
     total = db.scalar(
-        select(func.count(Order.id)).join(Source, Source.id == Order.source_id).where(*filters)
+        select(func.count(Order.id))
+        .select_from(Order)
+        .outerjoin(Source, Source.id == Order.source_id)
+        .where(*filters)
     ) or 0
     rows = db.execute(
         select(Order, Source.name)
-        .join(Source, Source.id == Order.source_id)
+        .outerjoin(Source, Source.id == Order.source_id)
         .where(*filters)
         .order_by(Order.business_date.desc(), Order.id.desc())
         .offset((page - 1) * page_size)

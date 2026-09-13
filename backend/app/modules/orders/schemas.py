@@ -86,21 +86,24 @@ class OrderOutput(BaseModel):
     order_no: str
     business_date: date
     status: str
-    source_id: int
-    source_name: str
-    contractor_id: int
-    contractor_type: str
-    contractor_name: str
+    source_id: int | None
+    source_name: str | None
+    contractor_id: int | None
+    contractor_type: str | None
+    contractor_name: str | None
     performer_id: int | None
     performer_name: str | None
     student_name: str | None
     point_balance: Decimal | None = None
     available_coupons: int = 0
     order_amount: Decimal
+    customer_received_amount: Decimal | None
     coupon_amount: Decimal
     actual_paid: Decimal
     settlement_basis_snapshot: str
+    settlement_method_snapshot: str
     discount_snapshot: Decimal
+    fixed_deduction_snapshot: Decimal
     settlement_income: Decimal
     income_overridden: bool
     income_override_reason: str | None

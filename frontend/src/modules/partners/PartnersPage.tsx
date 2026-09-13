@@ -11,6 +11,24 @@ import { PerformerManagement } from './PerformerManagement'
 
 type StatusFilter = 'active' | 'inactive' | 'all'
 
+function formatSourceSettlement(item: Pick<Source, 'default_settlement_method' | 'default_discount' | 'default_fixed_deduction'>) {
+  if (item.default_settlement_method === 'FIXED_DEDUCTION') {
+    return `-${Number(item.default_fixed_deduction).toFixed(2)}`
+  }
+  return `${(Number(item.default_discount) * 10).toFixed(2)} 折`
+}
+
+function sourceSettlementPayload(values: Record<string, unknown>, kind: 'create' | 'rate') {
+  const method = values[kind === 'create' ? 'default_settlement_method' : 'settlement_method']
+  const discountField = kind === 'create' ? 'default_discount' : 'discount'
+  const deductionField = kind === 'create' ? 'default_fixed_deduction' : 'fixed_deduction'
+  return {
+    [kind === 'create' ? 'default_settlement_method' : 'settlement_method']: method,
+    [discountField]: method === 'DISCOUNT' ? Number(values[discountField]) / 10 : 1,
+    [deductionField]: method === 'FIXED_DEDUCTION' ? Number(values[deductionField]) : 0,
+  }
+}
+
 export function PartnersPage() {
   const { message, modal } = App.useApp()
   const queryClient = useQueryClient()
@@ -26,6 +44,8 @@ export function PartnersPage() {
   const [editSourceForm] = Form.useForm()
   const [editLeaderForm] = Form.useForm()
   const [rateForm] = Form.useForm()
+  const sourceSettlementMethod = Form.useWatch('default_settlement_method', sourceForm)
+  const rateSettlementMethod = Form.useWatch('settlement_method', rateForm)
 
   const sources = useQuery({
     queryKey: ['sources', 'manage', sourceStatusFilter],
@@ -54,7 +74,11 @@ export function PartnersPage() {
   }, [leaders.data, leaderStatusFilter])
 
   const createSource = useMutation({
-    mutationFn: (values: Record<string, unknown>) => api.post('/partners/sources', { ...values, effective_date: dayjs(values.effective_date as string).format('YYYY-MM-DD'), default_discount: Number(values.default_discount) / 10 }),
+    mutationFn: (values: Record<string, unknown>) => api.post('/partners/sources', {
+      ...values,
+      effective_date: dayjs(values.effective_date as string).format('YYYY-MM-DD'),
+      ...sourceSettlementPayload(values, 'create'),
+    }),
     onSuccess: async () => { message.success('放单人员已创建'); setSourceOpen(false); sourceForm.resetFields(); await queryClient.invalidateQueries({ queryKey: ['sources'] }) },
     onError: (error) => message.error(errorMessage(error)),
   })
@@ -91,7 +115,7 @@ export function PartnersPage() {
         return api.post(`/partners/sources/${rateTarget.id}/rates`, {
           effective_date: effectiveDate,
           settlement_basis: values.settlement_basis,
-          discount: Number(values.discount) / 10,
+          ...sourceSettlementPayload(values, 'rate'),
         })
       }
       return api.post(`/partners/contractors/${rateTarget.id}/rates`, {
@@ -154,6 +178,17 @@ export function PartnersPage() {
     editSourceForm.setFieldsValue({ name: item.name, contact: item.contact, note: item.note })
   }
 
+  const openSourceRate = (item: Source) => {
+    setRateTarget({ type: 'source', id: item.id, name: item.name })
+    rateForm.setFieldsValue({
+      effective_date: dayjs(),
+      settlement_basis: item.default_basis,
+      settlement_method: item.default_settlement_method ?? 'DISCOUNT',
+      discount: Number(item.default_discount) * 10,
+      fixed_deduction: Number(item.default_fixed_deduction || 10),
+    })
+  }
+
   const openEditLeader = (item: Contractor) => {
     setEditingLeader(item)
     editLeaderForm.setFieldsValue({ name: item.name, contact: item.contact, note: item.note })
@@ -192,7 +227,7 @@ export function PartnersPage() {
                   { title: '联系方式', dataIndex: 'contact', render: (value) => value || '—' },
                   { title: '状态', dataIndex: 'is_active', width: 90, render: (value) => value ? <Tag color="success">正常</Tag> : <Tag>停用</Tag> },
                   { title: '默认结算基数', dataIndex: 'default_basis', render: (value) => value === 'ORDER_AMOUNT' ? '订单标价' : '券后价' },
-                  { title: '当前折扣', dataIndex: 'default_discount', render: (value) => `${(Number(value) * 10).toFixed(2)} 折` },
+                  { title: '当前结算', render: (_, item) => formatSourceSettlement(item) },
                   { title: '备注', dataIndex: 'note', render: (value) => value || '—' },
                   {
                     title: '操作',
@@ -200,7 +235,7 @@ export function PartnersPage() {
                     render: (_, item) => (
                       <Space wrap>
                         <Button icon={<EditOutlined />} onClick={() => openEditSource(item)}>编辑</Button>
-                        <Button icon={<PercentageOutlined />} onClick={() => setRateTarget({ type: 'source', id: item.id, name: item.name })}>调整费率</Button>
+                        <Button icon={<PercentageOutlined />} onClick={() => openSourceRate(item)}>调整费率</Button>
                         <Button
                           danger={item.is_active}
                           icon={<StopOutlined />}
@@ -265,11 +300,18 @@ export function PartnersPage() {
       <PerformerManagement />
 
       <Modal title="新增放单人员" open={sourceOpen} onCancel={() => setSourceOpen(false)} onOk={() => sourceForm.submit()} confirmLoading={createSource.isPending}>
-        <Form form={sourceForm} layout="vertical" requiredMark={false} onFinish={(values) => createSource.mutate(values)} initialValues={{ default_basis: 'ORDER_AMOUNT', default_discount: 9, effective_date: dayjs() }}>
+        <Form form={sourceForm} layout="vertical" requiredMark={false} onFinish={(values) => createSource.mutate(values)} initialValues={{ default_basis: 'ORDER_AMOUNT', default_settlement_method: 'DISCOUNT', default_discount: 9, default_fixed_deduction: 10, effective_date: dayjs() }}>
           <Form.Item name="name" label="名称" rules={[{ required: true }]}><Input /></Form.Item>
           <Form.Item name="contact" label="联系方式"><Input /></Form.Item>
           <Form.Item name="default_basis" label="默认结算基数" rules={[{ required: true }]}><Select options={[{ value: 'ORDER_AMOUNT', label: '订单标价' }, { value: 'AFTER_COUPON', label: '券后价' }]} /></Form.Item>
-          <Form.Item name="default_discount" label="默认折扣" rules={[{ required: true }]}><InputNumber min={0.01} max={10} precision={2} addonAfter="折" className="full-width" /></Form.Item>
+          <Form.Item name="default_settlement_method" label="结算方式" rules={[{ required: true }]}>
+            <Select options={[{ value: 'DISCOUNT', label: '折扣' }, { value: 'FIXED_DEDUCTION', label: '固定减额' }]} />
+          </Form.Item>
+          {sourceSettlementMethod === 'FIXED_DEDUCTION' ? (
+            <Form.Item name="default_fixed_deduction" label="固定减额" rules={[{ required: true }]}><InputNumber min={0} precision={2} addonBefore="-" addonAfter="元" className="full-width" /></Form.Item>
+          ) : (
+            <Form.Item name="default_discount" label="默认折扣" rules={[{ required: true }]}><InputNumber min={0.01} max={10} precision={2} addonAfter="折" className="full-width" /></Form.Item>
+          )}
           <Form.Item name="effective_date" label="生效日期" rules={[{ required: true }]}><DatePicker className="full-width" /></Form.Item>
           <Form.Item name="note" label="备注"><Input.TextArea /></Form.Item>
         </Form>
@@ -325,7 +367,14 @@ export function PartnersPage() {
           {rateTarget?.type === 'source' ? (
             <>
               <Form.Item name="settlement_basis" label="结算基数" rules={[{ required: true }]}><Select options={[{ value: 'ORDER_AMOUNT', label: '订单标价' }, { value: 'AFTER_COUPON', label: '券后价' }]} /></Form.Item>
-              <Form.Item name="discount" label="折扣" rules={[{ required: true }]}><InputNumber min={0.01} max={10} precision={2} addonAfter="折" className="full-width" /></Form.Item>
+              <Form.Item name="settlement_method" label="结算方式" rules={[{ required: true }]}>
+                <Select options={[{ value: 'DISCOUNT', label: '折扣' }, { value: 'FIXED_DEDUCTION', label: '固定减额' }]} />
+              </Form.Item>
+              {rateSettlementMethod === 'FIXED_DEDUCTION' ? (
+                <Form.Item name="fixed_deduction" label="固定减额" rules={[{ required: true }]}><InputNumber min={0} precision={2} addonBefore="-" addonAfter="元" className="full-width" /></Form.Item>
+              ) : (
+                <Form.Item name="discount" label="折扣" rules={[{ required: true }]}><InputNumber min={0.01} max={10} precision={2} addonAfter="折" className="full-width" /></Form.Item>
+              )}
             </>
           ) : (
             <Form.Item name="commission_per_order" label="每单佣金" rules={[{ required: true }]}><MoneyInput /></Form.Item>

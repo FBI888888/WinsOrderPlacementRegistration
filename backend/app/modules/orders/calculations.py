@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.modules.partners.models import SettlementBasis
+from app.modules.partners.models import SettlementBasis, SettlementMethod
 
 CENT = Decimal("0.01")
 
@@ -27,18 +27,25 @@ def calculate_order_amounts(
     discount: Decimal,
     commission: Decimal,
     settlement_income_override: Decimal | None = None,
+    settlement_method: SettlementMethod = SettlementMethod.DISCOUNT,
+    fixed_deduction: Decimal = Decimal("0"),
 ) -> OrderAmounts:
     if min(order_amount, coupon_amount, actual_paid, commission) < 0:
         raise ValueError("金额不能为负数")
     if coupon_amount > order_amount:
         raise ValueError("优惠券金额不能超过订单标价")
-    if discount <= 0 or discount > 1:
-        raise ValueError("折扣必须大于0且不超过1")
+    if fixed_deduction < 0:
+        raise ValueError("固定减额不能为负数")
 
     after_coupon = money(order_amount - coupon_amount)
     basis_amount = order_amount if settlement_basis == SettlementBasis.ORDER_AMOUNT else after_coupon
-    excess_amount = max(order_amount - Decimal("210"), Decimal("0"))
-    default_income = basis_amount * discount + excess_amount * (Decimal("1") - discount)
+    if settlement_method == SettlementMethod.FIXED_DEDUCTION:
+        default_income = max(basis_amount - fixed_deduction, Decimal("0"))
+    else:
+        if discount <= 0 or discount > 1:
+            raise ValueError("折扣必须大于0且不超过1")
+        excess_amount = max(order_amount - Decimal("210"), Decimal("0"))
+        default_income = basis_amount * discount + excess_amount * (Decimal("1") - discount)
     income = (
         money(settlement_income_override)
         if settlement_income_override is not None

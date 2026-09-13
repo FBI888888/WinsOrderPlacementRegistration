@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.modules.iam.models import MemberRole
+from app.modules.iam.models import BusinessMode, MemberRole
 
 
 class RegisterInput(BaseModel):
@@ -19,6 +19,15 @@ class LoginInput(BaseModel):
     tenant_id: int | None = None
 
 
+class SwitchTenantInput(BaseModel):
+    tenant_id: int
+
+
+class TenantCreateInput(BaseModel):
+    name: str = Field(min_length=2, max_length=100)
+    business_mode: BusinessMode
+
+
 class AuthOutput(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"
@@ -29,6 +38,7 @@ class TenantBrief(BaseModel):
     id: int
     name: str
     role: str
+    business_mode: str
 
 
 class MeOutput(BaseModel):
@@ -37,6 +47,7 @@ class MeOutput(BaseModel):
     email: str
     tenant_id: int
     tenant_name: str
+    business_mode: str
     role: str
     tenants: list[TenantBrief]
 

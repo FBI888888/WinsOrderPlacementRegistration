@@ -1,6 +1,8 @@
 export interface PreviewInput {
   settlementBasis?: 'ORDER_AMOUNT' | 'AFTER_COUPON'
+  settlementMethod?: 'DISCOUNT' | 'FIXED_DEDUCTION'
   discount?: number
+  fixedDeduction?: number
   orderAmount?: number
   couponAmount?: number
   actualPaid?: number
@@ -28,7 +30,10 @@ export function calculateOrderPreview(input: PreviewInput) {
   const basisAmount = input.settlementBasis === 'AFTER_COUPON'
     ? orderAmount - couponAmount
     : orderAmount
-  const income = input.settlementIncomeOverride ?? basisAmount * Number(input.discount ?? 0)
+  const defaultIncome = input.settlementMethod === 'FIXED_DEDUCTION'
+    ? Math.max(0, basisAmount - Number(input.fixedDeduction ?? 0))
+    : basisAmount * Number(input.discount ?? 0)
+  const income = input.settlementIncomeOverride ?? defaultIncome
   const commission = input.commissionOverride ?? Number(input.defaultCommission ?? 0)
   const cost = actualPaid + commission
   return { income, commission, cost, profit: income - cost }

@@ -4,7 +4,7 @@ import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { MoneyInput } from '../../shared/components'
 import { currency } from '../../shared/format'
-import type { Contractor, ContractorType, Order, Performer, Source } from '../../shared/types'
+import type { BusinessMode, Contractor, ContractorType, Order, Performer, Source } from '../../shared/types'
 import { calculateDefaultActualPaid, calculateOrderPreview } from './calculations'
 
 const normalizeName = (value?: string) => value?.trim().toLocaleLowerCase().replace(/\s+/g, ' ') ?? ''
@@ -53,6 +53,7 @@ export function OrderFormDrawer({
   sources,
   leaders,
   performers,
+  businessMode = 'FEDAICHU',
   submitting,
   onClose,
   onSubmit,
@@ -63,6 +64,7 @@ export function OrderFormDrawer({
   sources: Source[]
   leaders: Contractor[]
   performers: Performer[]
+  businessMode?: BusinessMode
   submitting: boolean
   onClose: () => void
   onSubmit: (values: OrderFormValues) => Promise<void>
@@ -106,16 +108,18 @@ export function OrderFormDrawer({
       contractor_type: 'LEADER',
       coupon_amount: 0,
       save_performer: true,
-      status: 'SUCCESS',
+      status: businessMode === 'JIJIHONG' ? 'DRAFT' : 'SUCCESS',
     })
-  }, [open, form, isEdit, initialOrder])
+  }, [open, form, isEdit, initialOrder, businessMode])
 
   const preview = useMemo(() => {
     const source = sources.find((item) => item.id === values?.source_id)
     const leader = leaders.find((item) => item.id === values?.contractor_id)
     return calculateOrderPreview({
       settlementBasis: source?.default_basis,
+      settlementMethod: source?.default_settlement_method,
       discount: Number(source?.default_discount ?? 0),
+      fixedDeduction: Number(source?.default_fixed_deduction ?? 0),
       orderAmount: values?.order_amount,
       couponAmount: values?.coupon_amount,
       actualPaid: values?.actual_paid,
@@ -180,7 +184,9 @@ export function OrderFormDrawer({
         showIcon
         message={isEdit
           ? '保存后会按业务日期重新计算订单；成功订单会自动冲销旧流水并按修改后的数据重新入账。'
-          : '页面预览使用当前默认费率；保存时后端会按业务日期解析费率并固化快照。'}
+          : businessMode === 'JIJIHONG'
+            ? '先保存订单，再由系统推荐支付宝账号拆单方案；人工确认付款后才扣减余额并入账。'
+            : '页面预览使用当前默认费率；保存时后端会按业务日期解析费率并固化快照。'}
       />
       <Form
         form={form}
@@ -245,7 +251,7 @@ export function OrderFormDrawer({
                 optionFilterProp="label"
                 options={sourceOptions.map((item) => ({
                   value: item.id,
-                  label: `${item.name} · ${(Number(item.default_discount) * 10).toFixed(2)}折${!item.is_active ? '（停用）' : ''}`,
+                  label: `${item.name} · ${item.default_settlement_method === 'FIXED_DEDUCTION' ? `-${Number(item.default_fixed_deduction).toFixed(2)}` : `${(Number(item.default_discount) * 10).toFixed(2)}折`}${!item.is_active ? '（停用）' : ''}`,
                 }))}
               />
             </Form.Item>
@@ -385,7 +391,9 @@ export function OrderFormDrawer({
           {!isEdit && (
             <Col xs={24} sm={10}>
               <Form.Item name="status" label="订单状态">
-                <Select options={[{ value: 'DRAFT', label: '草稿' }, { value: 'DISPATCHED', label: '已派单' }, { value: 'SUCCESS', label: '成功并自动入账' }]} />
+                <Select options={businessMode === 'JIJIHONG'
+                  ? [{ value: 'DRAFT', label: '草稿（稍后推荐支付方案）' }, { value: 'DISPATCHED', label: '已派单' }]
+                  : [{ value: 'DRAFT', label: '草稿' }, { value: 'DISPATCHED', label: '已派单' }, { value: 'SUCCESS', label: '成功并自动入账' }]} />
               </Form.Item>
             </Col>
           )}
@@ -396,7 +404,11 @@ export function OrderFormDrawer({
           </Col>
         </Row>
         <Typography.Text type="secondary">
-          {isEdit ? '编辑订单不会改变当前状态；如订单已被确认结算，需先冲正对应结算单。' : '成功订单会立即产生实付消耗、佣金应付和放单应收三类流水。'}
+          {isEdit
+            ? '编辑订单不会改变当前状态；如订单已被确认结算，需先冲正对应结算单。'
+            : businessMode === 'JIJIHONG'
+              ? '支付方案按清空账号优先、真实付款软上限和拆单数综合推荐。'
+              : '成功订单会立即产生实付消耗、佣金应付和放单应收三类流水。'}
         </Typography.Text>
       </Form>
     </Drawer>

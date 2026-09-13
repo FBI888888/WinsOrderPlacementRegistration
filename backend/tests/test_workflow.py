@@ -101,6 +101,67 @@ def test_success_order_posts_ledger_and_profit(client: TestClient, auth_headers:
     assert commission["balance"] == "5.00"
 
 
+def test_fixed_deduction_source_settles_order_minus_amount(
+    client: TestClient, auth_headers: dict[str, str]
+):
+    source = client.post(
+        "/api/v1/partners/sources",
+        headers=auth_headers,
+        json={
+            "name": "固定减额渠道",
+            "default_basis": "ORDER_AMOUNT",
+            "default_settlement_method": "FIXED_DEDUCTION",
+            "default_fixed_deduction": "10",
+            "effective_date": date.today().isoformat(),
+        },
+    )
+    assert source.status_code == 201, source.text
+    assert source.json()["default_settlement_method"] == "FIXED_DEDUCTION"
+    assert source.json()["default_fixed_deduction"] == "10.00"
+
+    leader = client.post(
+        "/api/v1/partners/contractors",
+        headers=auth_headers,
+        json={
+            "name": "固定减额组长",
+            "contractor_type": "LEADER",
+            "default_commission": "5",
+            "effective_date": date.today().isoformat(),
+        },
+    )
+    assert leader.status_code == 201, leader.text
+    source_id = source.json()["id"]
+    leader_id = leader.json()["id"]
+
+    order_300 = create_order(
+        client,
+        auth_headers,
+        source_id=source_id,
+        leader_id=leader_id,
+        student_name="学生甲",
+        order_amount="300",
+        coupon_amount="0",
+        actual_paid="300",
+        status="SUCCESS",
+    )
+    order_500 = create_order(
+        client,
+        auth_headers,
+        source_id=source_id,
+        leader_id=leader_id,
+        student_name="学生乙",
+        order_amount="500",
+        coupon_amount="0",
+        actual_paid="500",
+        status="SUCCESS",
+    )
+
+    assert order_300["settlement_income"] == "290.00"
+    assert order_300["settlement_method_snapshot"] == "FIXED_DEDUCTION"
+    assert order_300["fixed_deduction_snapshot"] == "10.00"
+    assert order_500["settlement_income"] == "490.00"
+
+
 def test_ledger_entries_filter_and_export(client: TestClient, auth_headers: dict[str, str]):
     source_id, leader_id, _ = create_business_data(client, auth_headers)
     today = date.today()

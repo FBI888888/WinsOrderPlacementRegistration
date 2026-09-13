@@ -1,18 +1,53 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.modules.partners.models import ContractorType, PerformerType, SettlementBasis
+from app.modules.partners.models import ContractorType, PerformerType, SettlementBasis, SettlementMethod
+
+
+def _normalize_settlement(
+    *,
+    method: SettlementMethod,
+    discount: Decimal | None,
+    fixed_deduction: Decimal | None,
+    require_discount: bool,
+) -> tuple[Decimal, Decimal]:
+    if method == SettlementMethod.FIXED_DEDUCTION:
+        deduction = Decimal("10") if fixed_deduction is None else Decimal(fixed_deduction)
+        if deduction < 0:
+            raise ValueError("固定减额不能为负数")
+        return Decimal("1"), deduction
+    if discount is None:
+        if require_discount:
+            raise ValueError("折扣方式必须填写折扣")
+        discount = Decimal("0.9")
+    if discount <= 0 or discount > 1:
+        raise ValueError("折扣必须大于0且不超过1")
+    return Decimal(discount), Decimal("0")
 
 
 class SourceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     contact: str | None = Field(default=None, max_length=100)
     default_basis: SettlementBasis = SettlementBasis.ORDER_AMOUNT
-    default_discount: Decimal = Field(default=Decimal("0.9"), gt=0, le=1)
+    default_settlement_method: SettlementMethod = SettlementMethod.DISCOUNT
+    default_discount: Decimal | None = None
+    default_fixed_deduction: Decimal | None = None
     note: str | None = Field(default=None, max_length=500)
     effective_date: date = Field(default_factory=date.today)
+
+    @model_validator(mode="after")
+    def normalize_settlement(self):
+        discount, deduction = _normalize_settlement(
+            method=self.default_settlement_method,
+            discount=self.default_discount,
+            fixed_deduction=self.default_fixed_deduction,
+            require_discount=False,
+        )
+        self.default_discount = discount
+        self.default_fixed_deduction = deduction
+        return self
 
 
 class SourceUpdate(BaseModel):
@@ -25,7 +60,21 @@ class SourceUpdate(BaseModel):
 class SourceRateCreate(BaseModel):
     effective_date: date
     settlement_basis: SettlementBasis
-    discount: Decimal = Field(gt=0, le=1)
+    settlement_method: SettlementMethod = SettlementMethod.DISCOUNT
+    discount: Decimal | None = None
+    fixed_deduction: Decimal | None = None
+
+    @model_validator(mode="after")
+    def normalize_settlement(self):
+        discount, deduction = _normalize_settlement(
+            method=self.settlement_method,
+            discount=self.discount,
+            fixed_deduction=self.fixed_deduction,
+            require_discount=True,
+        )
+        self.discount = discount
+        self.fixed_deduction = deduction
+        return self
 
 
 class SourceOutput(BaseModel):
@@ -35,7 +84,9 @@ class SourceOutput(BaseModel):
     name: str
     contact: str | None
     default_basis: str
+    default_settlement_method: str
     default_discount: Decimal
+    default_fixed_deduction: Decimal
     is_active: bool
     note: str | None
     created_at: datetime
@@ -106,6 +157,8 @@ class PerformerOutput(BaseModel):
 class RateSnapshot(BaseModel):
     source_id: int
     settlement_basis: SettlementBasis
+    settlement_method: SettlementMethod = SettlementMethod.DISCOUNT
     discount: Decimal
+    fixed_deduction: Decimal = Decimal("0")
     contractor_id: int
     commission: Decimal

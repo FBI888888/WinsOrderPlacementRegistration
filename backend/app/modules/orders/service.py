@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.modules.funds.models import LedgerAccount, LedgerEntryType
 from app.modules.funds.service import append_entry, order_balance_snapshot, reverse_order_entries
 from app.modules.iam.audit import record_audit
+from app.modules.iam.models import BusinessMode, Tenant
 from app.modules.orders.calculations import calculate_order_amounts
 from app.modules.orders.models import Order, OrderStatus
 from app.modules.orders.schemas import OrderCreate, OrderUpdate
@@ -27,6 +28,11 @@ def get_order(db: Session, tenant_id: int, order_id: int) -> Order:
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订单不存在")
     return order
+
+
+def _is_jijihong(db: Session, tenant_id: int) -> bool:
+    tenant = db.get(Tenant, tenant_id)
+    return bool(tenant and tenant.business_mode == BusinessMode.JIJIHONG.value)
 
 
 def _assignment(
@@ -96,7 +102,7 @@ def _financial_values(
     source = get_source(db, tenant_id, source_id)
     if not source.is_active and source.id != allow_inactive_source_id:
         raise HTTPException(status_code=422, detail="放单人员已停用")
-    basis, discount = resolve_source_rate(db, tenant_id, source_id, business_date)
+    rate = resolve_source_rate(db, tenant_id, source_id, business_date)
     (
         final_contractor_id,
         contractor_name,
@@ -122,8 +128,10 @@ def _financial_values(
             order_amount=order_amount,
             coupon_amount=coupon_amount,
             actual_paid=actual_paid,
-            settlement_basis=basis,
-            discount=discount,
+            settlement_basis=rate.settlement_basis,
+            settlement_method=rate.settlement_method,
+            discount=rate.discount,
+            fixed_deduction=rate.fixed_deduction,
             commission=commission,
             settlement_income_override=settlement_income_override,
         )
@@ -134,8 +142,10 @@ def _financial_values(
         "contractor_name_snapshot": contractor_name,
         "performer_id": final_performer_id,
         "performer_name_snapshot": final_performer_name,
-        "settlement_basis_snapshot": basis.value,
-        "discount_snapshot": discount,
+        "settlement_basis_snapshot": rate.settlement_basis.value,
+        "settlement_method_snapshot": rate.settlement_method.value,
+        "discount_snapshot": rate.discount,
+        "fixed_deduction_snapshot": rate.fixed_deduction,
         "settlement_income": amounts.settlement_income,
         "income_overridden": settlement_income_override is not None,
         "commission": amounts.commission,
@@ -205,6 +215,11 @@ def _book_success(db: Session, order: Order, user_id: int) -> None:
 
 
 def create_order(db: Session, *, tenant_id: int, user_id: int, data: OrderCreate) -> Order:
+    if _is_jijihong(db, tenant_id):
+        raise HTTPException(
+            status_code=422,
+            detail="季季红订单不使用合作方字段，请通过支付宝资金池订单接口保存并预占方案",
+        )
     financial = _financial_values(
         db,
         tenant_id=tenant_id,
@@ -266,6 +281,12 @@ def update_order(
     db: Session, *, tenant_id: int, user_id: int, order_id: int, data: OrderUpdate
 ) -> Order:
     from app.modules.settlements.service import ensure_order_not_locked
+
+    if _is_jijihong(db, tenant_id):
+        raise HTTPException(
+            status_code=422,
+            detail="季季红订单请通过替换预占方案接口修改",
+        )
 
     order = get_order(db, tenant_id, order_id)
     ensure_order_not_locked(db, tenant_id=tenant_id, order_id=order.id)
@@ -398,6 +419,26 @@ def update_order(
     )
     previous_status = OrderStatus(order.status)
     previous_success_at = order.success_at
+    if _is_jijihong(db, tenant_id):
+        from app.modules.alipay_pool.plan_service import (
+            has_confirmed_plan,
+            release_reserved_plan_for_order,
+        )
+
+        if previous_status == OrderStatus.SUCCESS and has_confirmed_plan(
+            db, tenant_id, order.id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="季季红成功订单需先冲正支付方案，再重新登记",
+            )
+        release_reserved_plan_for_order(
+            db,
+            tenant_id=tenant_id,
+            order_id=order.id,
+            user_id=user_id,
+            reason="订单金额或归属发生修改",
+        )
     if previous_status == OrderStatus.SUCCESS:
         reverse_order_entries(
             db,
@@ -473,28 +514,58 @@ def transition_order(
     if target in (OrderStatus.CANCELLED, OrderStatus.REVERSED) and not reason:
         raise HTTPException(status_code=422, detail="取消或冲正必须填写原因")
     if target == OrderStatus.SUCCESS:
+        if _is_jijihong(db, tenant_id):
+            raise HTTPException(
+                status_code=409,
+                detail="季季红订单必须通过支付方案人工确认成功",
+            )
         _book_success(db, order, user_id)
     elif target == OrderStatus.REVERSED:
         from app.modules.settlements.service import ensure_order_not_locked
 
         ensure_order_not_locked(db, tenant_id=tenant_id, order_id=order.id)
-        reverse_order_entries(
-            db,
-            tenant_id=tenant_id,
-            order_id=order.id,
-            user_id=user_id,
-            business_date=order.business_date,
-            note=reason or "订单冲正",
-        )
-        reverse_order_points(
-            db,
-            order=order,
-            user_id=user_id,
-            business_date=order.business_date,
-            note=reason or "订单积分冲正",
-        )
+        if _is_jijihong(db, tenant_id):
+            from app.modules.alipay_pool.plan_service import (
+                reverse_confirmed_plan_for_order,
+            )
+
+            reverse_confirmed_plan_for_order(
+                db,
+                tenant_id=tenant_id,
+                order_id=order.id,
+                user_id=user_id,
+                reason=reason or "订单支付冲正",
+            )
+        else:
+            reverse_order_entries(
+                db,
+                tenant_id=tenant_id,
+                order_id=order.id,
+                user_id=user_id,
+                business_date=order.business_date,
+                note=reason or "订单冲正",
+            )
+            reverse_order_points(
+                db,
+                order=order,
+                user_id=user_id,
+                business_date=order.business_date,
+                note=reason or "订单积分冲正",
+            )
         order.status = target.value
     else:
+        if target == OrderStatus.CANCELLED and _is_jijihong(db, tenant_id):
+            from app.modules.alipay_pool.plan_service import (
+                release_reserved_plan_for_order,
+            )
+
+            release_reserved_plan_for_order(
+                db,
+                tenant_id=tenant_id,
+                order_id=order.id,
+                user_id=user_id,
+                reason=reason or "订单取消",
+            )
         order.status = target.value
     record_audit(
         db,

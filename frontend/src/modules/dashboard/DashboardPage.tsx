@@ -29,7 +29,9 @@ export function DashboardPage() {
     <div className="page-stack">
       <PageTitle
         title="经营概览"
-        description="收入与利润按成功订单确认；垫资只反映现金余额，不重复计入成本。"
+        description={data?.business_mode === 'JIJIHONG'
+          ? '确认付款后记录客户实收、支付宝余额成本、真实付款成本与订单利润。'
+          : '收入与利润按成功订单确认；垫资只反映现金余额，不重复计入成本。'}
         extra={
           <Space wrap>
             <RangePicker value={range} onChange={(value) => value && setRange(value as [Dayjs, Dayjs])} />
@@ -43,13 +45,13 @@ export function DashboardPage() {
           <Card className="metric-card"><Statistic title="成功订单" value={data?.success_count ?? 0} suffix={`/ ${data?.order_count ?? 0} 单`} /></Card>
         </Col>
         <Col xs={24} sm={12} xl={6}>
-          <Card className="metric-card"><Statistic title="结算收入" value={data?.settlement_income ?? 0} formatter={(value) => currency(Number(value))} /></Card>
+          <Card className="metric-card"><Statistic title={data?.business_mode === 'JIJIHONG' ? '客户实收' : '结算收入'} value={data?.customer_received ?? data?.settlement_income ?? 0} formatter={(value) => currency(Number(value))} /></Card>
         </Col>
         <Col xs={24} sm={12} xl={6}>
           <Card className="metric-card"><Statistic title="订单成本" value={data?.cost ?? 0} formatter={(value) => currency(Number(value))} /></Card>
         </Col>
         <Col xs={24} sm={12} xl={6}>
-          <Card className="metric-card accent"><Statistic title="期间利润" value={data?.profit ?? 0} valueStyle={{ color: Number(data?.profit ?? 0) < 0 ? '#b7473a' : '#315c4c' }} formatter={(value) => currency(Number(value))} /></Card>
+          <Card className="metric-card accent"><Statistic title={data?.business_mode === 'JIJIHONG' ? '期间净收益' : '期间利润'} value={data?.period_net_income ?? data?.profit ?? 0} valueStyle={{ color: Number(data?.period_net_income ?? data?.profit ?? 0) < 0 ? '#b7473a' : '#315c4c' }} formatter={(value) => currency(Number(value))} /></Card>
         </Col>
       </Row>
 
@@ -66,8 +68,9 @@ export function DashboardPage() {
               columns={[
                 { title: '业务日期', dataIndex: 'business_date', width: 110 },
                 { title: '记录时间', dataIndex: 'created_at', width: 170, render: dateTime },
-                { title: '放单人员', dataIndex: 'source_name' },
-                { title: '做单方', dataIndex: 'contractor_name' },
+                ...(data?.business_mode === 'JIJIHONG'
+                  ? [{ title: '订单金额', dataIndex: 'order_amount', align: 'right' as const, render: (value: string) => <Money value={value} /> }]
+                  : [{ title: '放单人员', dataIndex: 'source_name' }, { title: '做单方', dataIndex: 'contractor_name' }]),
                 { title: '状态', dataIndex: 'status', render: (value) => <StatusTag value={value} /> },
                 { title: '利润', dataIndex: 'profit', align: 'right', render: (value) => <Money value={value} signed /> },
               ]}
@@ -75,16 +78,17 @@ export function DashboardPage() {
           </Card>
         </Col>
         <Col xs={24} lg={8}>
-          <Card title="当前往来余额" className="balance-card">
+          {data?.business_mode === 'JIJIHONG' ? <Card title="支付宝资金池" className="balance-card">
+            <div><Typography.Text>当前余额</Typography.Text><Money value={data?.pool_balance ?? 0} /></div>
+            <div><Typography.Text>优惠券使用</Typography.Text><Money value={data?.coupon_used ?? 0} /></div>
+            <div><Typography.Text>真实付款</Typography.Text><Money value={data?.external_cash ?? 0} /></div>
+            <div><Typography.Text>盘盈盘亏</Typography.Text><Money value={data?.reconciliation_gain_loss ?? 0} signed /></div>
+          </Card> : <Card title="当前往来余额" className="balance-card">
             <div><Typography.Text>可用垫资</Typography.Text><Money value={data?.advance_balance ?? 0} signed /></div>
             <div><Typography.Text>待付佣金</Typography.Text><Money value={data?.commission_payable ?? 0} /></div>
             <div><Typography.Text>放单应收</Typography.Text><Money value={data?.source_receivable ?? 0} /></div>
-            <div className="warning-line">
-              <WarningOutlined />
-              <span>期间负利润订单</span>
-              <strong>{data?.negative_profit_count ?? 0} 单</strong>
-            </div>
-          </Card>
+            <div className="warning-line"><WarningOutlined /><span>期间负利润订单</span><strong>{data?.negative_profit_count ?? 0} 单</strong></div>
+          </Card>}
         </Col>
       </Row>
     </div>

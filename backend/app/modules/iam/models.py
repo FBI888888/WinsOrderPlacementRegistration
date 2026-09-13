@@ -13,10 +13,18 @@ class MemberRole(StrEnum):
     VIEWER = "VIEWER"
 
 
+class BusinessMode(StrEnum):
+    FEDAICHU = "FEDAICHU"
+    JIJIHONG = "JIJIHONG"
+
+
 class Tenant(Base, IdMixin, TimestampMixin):
     __tablename__ = "tenants"
 
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    business_mode: Mapped[str] = mapped_column(
+        String(20), default=BusinessMode.FEDAICHU.value, nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 

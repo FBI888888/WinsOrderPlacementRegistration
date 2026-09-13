@@ -2,8 +2,6 @@ from datetime import date
 from decimal import Decimal
 from enum import StrEnum
 
-from enum import StrEnum
-
 from sqlalchemy import Boolean, Date, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +11,11 @@ from app.db.base import Base, IdMixin, TenantOwnedMixin, TimestampMixin
 class SettlementBasis(StrEnum):
     ORDER_AMOUNT = "ORDER_AMOUNT"
     AFTER_COUPON = "AFTER_COUPON"
+
+
+class SettlementMethod(StrEnum):
+    DISCOUNT = "DISCOUNT"
+    FIXED_DEDUCTION = "FIXED_DEDUCTION"
 
 
 class ContractorType(StrEnum):
@@ -27,7 +30,13 @@ class Source(Base, IdMixin, TimestampMixin, TenantOwnedMixin):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     contact: Mapped[str | None] = mapped_column(String(100))
     default_basis: Mapped[str] = mapped_column(String(30), nullable=False)
+    default_settlement_method: Mapped[str] = mapped_column(
+        String(30), default=SettlementMethod.DISCOUNT.value, nullable=False
+    )
     default_discount: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    default_fixed_deduction: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0"), nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500))
 
@@ -41,7 +50,13 @@ class SourceRate(Base, IdMixin, TimestampMixin, TenantOwnedMixin):
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), nullable=False, index=True)
     effective_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     settlement_basis: Mapped[str] = mapped_column(String(30), nullable=False)
+    settlement_method: Mapped[str] = mapped_column(
+        String(30), default=SettlementMethod.DISCOUNT.value, nullable=False
+    )
     discount: Mapped[Decimal] = mapped_column(Numeric(7, 4), nullable=False)
+    fixed_deduction: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0"), nullable=False
+    )
 
 
 class Contractor(Base, IdMixin, TimestampMixin, TenantOwnedMixin):

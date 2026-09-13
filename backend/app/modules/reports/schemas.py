@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class DashboardSummary(BaseModel):
+    business_mode: str = "FEDAICHU"
     date_from: date
     date_to: date
     order_count: int
@@ -16,6 +17,13 @@ class DashboardSummary(BaseModel):
     commission_payable: Decimal
     source_receivable: Decimal
     negative_profit_count: int
+    customer_received: Decimal | None = None
+    coupon_used: Decimal | None = None
+    balance_used: Decimal | None = None
+    external_cash: Decimal | None = None
+    pool_balance: Decimal | None = None
+    reconciliation_gain_loss: Decimal | None = None
+    period_net_income: Decimal | None = None
 
 
 class PerformanceSummary(BaseModel):
@@ -93,3 +101,47 @@ class ExportLogOutput(BaseModel):
     row_count: int
     file_hash: str
     created_at: datetime
+
+
+class JijihongReportSummary(BaseModel):
+    date_from: date
+    date_to: date
+    order_count: int
+    order_amount: Decimal
+    customer_received: Decimal
+    coupon_used: Decimal
+    balance_used: Decimal
+    external_cash: Decimal
+    cost: Decimal
+    profit: Decimal
+    reconciliation_gain_loss: Decimal
+    period_net_income: Decimal
+    soft_cap_exceeded_count: int
+    exhausted_account_count: int
+    pool_balance: Decimal
+
+
+class JijihongDailyRow(BaseModel):
+    business_date: date
+    order_count: int
+    order_amount: Decimal
+    customer_received: Decimal
+    coupon_used: Decimal
+    balance_used: Decimal
+    external_cash: Decimal
+    cost: Decimal
+    profit: Decimal
+
+
+class JijihongBreakdownRow(BaseModel):
+    group_type: str
+    entity_id: int
+    entity_name: str
+    order_count: int
+    order_amount: Decimal
+    customer_received: Decimal
+    coupon_used: Decimal
+    balance_used: Decimal
+    external_cash: Decimal
+    cost: Decimal
+    profit: Decimal

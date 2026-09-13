@@ -6,6 +6,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from './app/AppShell'
 import { ProtectedRoute } from './app/ProtectedRoute'
 import { AuthProvider } from './shared/AuthProvider'
+import { useAuth } from './shared/auth-context'
 import './App.css'
 
 const lazyPage = <T extends Record<string, unknown>, K extends keyof T>(
@@ -18,16 +19,30 @@ const DashboardPage = lazyPage(() => import('./modules/dashboard/DashboardPage')
 const OrdersPage = lazyPage(() => import('./modules/orders/OrdersPage'), 'OrdersPage')
 const PartnersPage = lazyPage(() => import('./modules/partners/PartnersPage'), 'PartnersPage')
 const FundsPage = lazyPage(() => import('./modules/funds/FundsPage'), 'FundsPage')
+const JijihongFundsPage = lazyPage(() => import('./modules/funds/JijihongFundsPage'), 'JijihongFundsPage')
 const SettlementsPage = lazyPage(() => import('./modules/settlements/SettlementsPage'), 'SettlementsPage')
+const AlipayReconciliationsPage = lazyPage(() => import('./modules/settlements/AlipayReconciliationsPage'), 'AlipayReconciliationsPage')
 const ReportsPage = lazyPage(() => import('./modules/reports/ReportsPage'), 'ReportsPage')
+const JijihongReportsPage = lazyPage(() => import('./modules/reports/JijihongReportsPage'), 'JijihongReportsPage')
 const TeamPage = lazyPage(() => import('./modules/team/TeamPage'), 'TeamPage')
 const AuditPage = lazyPage(() => import('./modules/audit/AuditPage'), 'AuditPage')
+const AlipayPoolPage = lazyPage(() => import('./modules/alipay-pool/AlipayPoolPage'), 'AlipayPoolPage')
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: { staleTime: 20_000, retry: 1, refetchOnWindowFocus: false },
   },
 })
+
+function FedaichuOnly({ children }: { children: React.ReactNode }) {
+  const { me } = useAuth()
+  return me?.business_mode === 'FEDAICHU' ? children : <Navigate to="/" replace />
+}
+
+function BusinessModePage({ fedaichu, jijihong }: { fedaichu: React.ReactNode; jijihong: React.ReactNode }) {
+  const { me } = useAuth()
+  return me?.business_mode === 'JIJIHONG' ? jijihong : fedaichu
+}
 
 function App() {
   return (
@@ -62,10 +77,11 @@ function App() {
                     <Route element={<AppShell />}>
                       <Route index element={<DashboardPage />} />
                       <Route path="orders" element={<OrdersPage />} />
-                      <Route path="partners" element={<PartnersPage />} />
-                      <Route path="funds" element={<FundsPage />} />
-                      <Route path="settlements" element={<SettlementsPage />} />
-                      <Route path="reports" element={<ReportsPage />} />
+                      <Route path="alipay-pool" element={<AlipayPoolPage />} />
+                      <Route path="partners" element={<FedaichuOnly><PartnersPage /></FedaichuOnly>} />
+                      <Route path="funds" element={<BusinessModePage fedaichu={<FundsPage />} jijihong={<JijihongFundsPage />} />} />
+                      <Route path="settlements" element={<BusinessModePage fedaichu={<SettlementsPage />} jijihong={<AlipayReconciliationsPage />} />} />
+                      <Route path="reports" element={<BusinessModePage fedaichu={<ReportsPage />} jijihong={<JijihongReportsPage />} />} />
                       <Route path="team" element={<TeamPage />} />
                       <Route path="audit" element={<AuditPage />} />
                     </Route>

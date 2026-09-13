@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react'
-import type { Me } from './types'
+import type { BusinessMode, Me, TenantBrief } from './types'
 
 export interface AuthContextValue {
   me: Me | null
@@ -8,6 +8,8 @@ export interface AuthContextValue {
   register: (data: { tenant_name: string; name: string; email: string; password: string }) => Promise<void>
   logout: () => Promise<void>
   reloadMe: () => Promise<void>
+  switchTenant: (tenantId: number) => Promise<void>
+  createTenant: (name: string, businessMode: BusinessMode) => Promise<TenantBrief>
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null)

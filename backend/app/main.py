@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.core.config import get_settings
+from app.modules.iam.dependencies import DbSession
+from app.modules.alipay_pool.router import router as alipay_pool_router
 from app.modules.funds.router import router as funds_router
 from app.modules.iam.router import router as iam_router
 from app.modules.orders.router import router as orders_router
@@ -33,6 +36,7 @@ for router in (
     funds_router,
     settlements_router,
     reports_router,
+    alipay_pool_router,
 ):
     app.include_router(router, prefix=settings.api_prefix)
 
@@ -40,3 +44,14 @@ for router in (
 @app.get("/health", tags=["系统"])
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/livez", include_in_schema=False)
+def livez() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/readyz", include_in_schema=False)
+def readyz(db: DbSession) -> dict[str, str]:
+    db.execute(text("SELECT 1"))
+    return {"status": "ready"}

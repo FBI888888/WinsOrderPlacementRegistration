@@ -8,10 +8,14 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   OrderedListOutlined,
+  PlusOutlined,
+  SwapOutlined,
   TeamOutlined,
   TransactionOutlined,
+  WalletOutlined,
 } from '@ant-design/icons'
-import { Avatar, Button, Dropdown, Grid, Layout, Menu, Space, Typography } from 'antd'
+import { useQueryClient } from '@tanstack/react-query'
+import { App, Avatar, Button, Dropdown, Grid, Input, Layout, Menu, Space, Typography } from 'antd'
 import { useMemo, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../shared/auth-context'
@@ -22,7 +26,8 @@ const { Header, Sider, Content } = Layout
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: '经营概览' },
   { key: '/orders', icon: <OrderedListOutlined />, label: '订单登记' },
-  { key: '/partners', icon: <TeamOutlined />, label: '合作方' },
+  { key: '/alipay-pool', icon: <WalletOutlined />, label: '支付宝资金池', mode: 'JIJIHONG' },
+  { key: '/partners', icon: <TeamOutlined />, label: '合作方', mode: 'FEDAICHU' },
   { key: '/funds', icon: <TransactionOutlined />, label: '资金流水' },
   { key: '/settlements', icon: <FileDoneOutlined />, label: '结算中心' },
   { key: '/reports', icon: <BookOutlined />, label: '报表中心' },
@@ -31,16 +36,61 @@ const menuItems = [
 ]
 
 export function AppShell() {
-  const { me, logout } = useAuth()
+  const { me, logout, switchTenant, createTenant } = useAuth()
+  const { message, modal } = App.useApp()
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
   const screens = Grid.useBreakpoint()
   const [collapsed, setCollapsed] = useState(false)
   const compact = !screens.lg
   const visibleItems = useMemo(
-    () => menuItems.filter((item) => !item.ownerOnly || me?.role === 'OWNER'),
-    [me?.role],
+    () => menuItems.filter(
+      (item) =>
+        (!item.ownerOnly || me?.role === 'OWNER')
+        && (!item.mode || item.mode === me?.business_mode),
+    ).map((item) => ({
+      key: item.key,
+      icon: item.icon,
+      label: item.key === '/settlements' && me?.business_mode === 'JIJIHONG'
+        ? '账号对账'
+        : item.label,
+    })),
+    [me?.role, me?.business_mode],
   )
+  const isJijihong = me?.business_mode === 'JIJIHONG'
+
+  const changeTenant = async (tenantId: number) => {
+    if (tenantId === me?.tenant_id) return
+    try {
+      await switchTenant(tenantId)
+      queryClient.clear()
+      navigate('/')
+      message.success('已切换账套')
+    } catch {
+      message.error('账套切换失败')
+    }
+  }
+
+  const addJijihongTenant = () => {
+    let name = '季季红'
+    modal.confirm({
+      title: '新增季季红账套',
+      content: (
+        <Input
+          defaultValue={name}
+          placeholder="账套名称"
+          onChange={(event) => { name = event.target.value }}
+        />
+      ),
+      okText: '创建并切换',
+      onOk: async () => {
+        if (!name.trim()) throw new Error('请输入账套名称')
+        const tenant = await createTenant(name.trim(), 'JIJIHONG')
+        await changeTenant(tenant.id)
+      },
+    })
+  }
 
   return (
     <Layout className="app-layout">
@@ -53,11 +103,11 @@ export function AppShell() {
         trigger={null}
       >
         <button className="brand" type="button" onClick={() => navigate('/')}>
-          <span className="brand-mark">账</span>
+          <span className="brand-mark">{isJijihong ? '季' : '费'}</span>
           {!collapsed && !compact && (
             <span>
-              <strong>做单账本</strong>
-              <small>ORDER LEDGER</small>
+              <strong>{isJijihong ? '季季红账本' : '费大厨账本'}</strong>
+              <small>{isJijihong ? 'JI JI HONG' : 'FEI DA CHU'}</small>
             </span>
           )}
         </button>
@@ -87,10 +137,36 @@ export function AppShell() {
                 <Button icon={<MenuUnfoldOutlined />}>菜单</Button>
               </Dropdown>
             )}
-            <div className="tenant-title">
-              <Typography.Text strong>{me?.tenant_name}</Typography.Text>
-              <Typography.Text type="secondary">独立账套</Typography.Text>
-            </div>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  ...(me?.tenants ?? []).map((tenant) => ({
+                    key: String(tenant.id),
+                    icon: tenant.id === me?.tenant_id ? <SwapOutlined /> : undefined,
+                    label: tenant.name + ' · ' + (tenant.business_mode === 'JIJIHONG' ? '季季红' : '费大厨'),
+                  })),
+                  { type: 'divider' as const },
+                  {
+                    key: 'create-jijihong',
+                    icon: <PlusOutlined />,
+                    label: '新增季季红账套',
+                    disabled: me?.role !== 'OWNER',
+                  },
+                ],
+                onClick: ({ key }) => {
+                  if (key === 'create-jijihong') addJijihongTenant()
+                  else void changeTenant(Number(key))
+                },
+              }}
+            >
+              <button className="tenant-title tenant-switcher" type="button">
+                <Typography.Text strong>{me?.tenant_name}</Typography.Text>
+                <Typography.Text type="secondary">
+                  {isJijihong ? '季季红独立账套' : '费大厨独立账套'}
+                </Typography.Text>
+              </button>
+            </Dropdown>
           </Space>
           <Dropdown
             trigger={['click']}
